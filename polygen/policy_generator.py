@@ -18,6 +18,7 @@ import time
 import warnings
 from collections.abc import Callable
 from concurrent import futures
+from dataclasses import dataclass
 from enum import Enum
 from hashlib import sha1
 from typing import Any, Iterable, NamedTuple
@@ -37,9 +38,7 @@ MB = 1048576  # 1024*1024
 RELOAD_FIFO_NAME = "polygen_reload.fifo"
 RELOAD_LIMITS_REQ = "reload_limits"
 CACHE_LIMIT_FILE_NAME = "cache_limits.json"
-USER_TO_QOS_KEY = "user_to_qos_id"
-QOS_KEY = "qos"
-DEFAULT_QOS_KEY = "DEFAULT"
+DEFAULT_QOS_ID = "common"
 
 REDIS_KEY_TYPE_VERB = "verb"
 REDIS_KEY_TYPE_CONN = "conn"
@@ -76,6 +75,12 @@ class Direction(Enum):
 class DemandKey(NamedTuple):
     user_key: str
     direction: Direction
+
+
+@dataclass
+class LimitConfig:
+    user_to_qos_id: dict[str, str]
+    qos: dict[str, dict[str, float]]
 
 
 # This maps a (user-access-key, transfer-direction) tuple to:
@@ -409,20 +414,18 @@ class PolicyGenerator:
             raise
         return config
 
-    def _load_limits_from_file(
-        self, file_path: str
-    ) -> dict[str, dict[str, str | dict[str, float]]]:
+    def _load_limits_from_file(self, file_path: str) -> LimitConfig:
         self.logger.info(f"Loading limits from file {file_path}")
         if not os.path.isfile(file_path):
             self.logger.error(f"no {file_path} existed, nothing was cached")
-            return {}
+            return LimitConfig({}, {})
         try:
             with open(file_path, "r") as targeted_file:
-                target = json.load(targeted_file)
-                return target
+                config_dict = json.load(targeted_file)
+                return LimitConfig(**config_dict)
         except Exception as e:
             self.logger.exception(f"Failed to load json from {file_path} {e}")
-            return {}
+            return LimitConfig({}, {})
 
     def _get_haproxies_from_config(
         self, config: dict[str, Any]
@@ -492,9 +495,9 @@ class PolicyGenerator:
 
     def _get_limit(self, cat: str, key: str) -> float:
         # Try to get the configured QoS ID for the user
-        qos_id = self.key_limits.get(USER_TO_QOS_KEY, {}).get(key)
+        qos_id = self.key_limits.user_to_qos_id.get(key)
         if qos_id and isinstance(qos_id, str):
-            qos_id_limits = self.key_limits.get(QOS_KEY, {}).get(qos_id, {})
+            qos_id_limits = self.key_limits.qos.get(qos_id, {})
             if isinstance(qos_id_limits, dict):
                 limit = qos_id_limits.get(cat, QOS_VERB_LIMIT_NOT_CONFIGURED)
                 if limit != QOS_VERB_LIMIT_NOT_CONFIGURED:
@@ -505,12 +508,15 @@ class PolicyGenerator:
 
         # Fallback to DEFAULT limits if not found
         self.unknown_users.add(key)
-        qos_id_limits = self.key_limits.get(QOS_KEY, {}).get(DEFAULT_QOS_KEY, {})
+        default_policy_name = self.key_limits.user_to_qos_id.get(
+            DEFAULT_QOS_ID, "DEFAULT"
+        )
+        qos_id_limits = self.key_limits.qos.get(default_policy_name, {})
         if isinstance(qos_id_limits, dict):
             limit = qos_id_limits.get(cat, QOS_VERB_LIMIT_NOT_CONFIGURED)
             if limit != QOS_VERB_LIMIT_NOT_CONFIGURED:
                 self.logger.debug(
-                    f"For {key} {cat}, {limit} is using {DEFAULT_QOS_KEY} configured limit"
+                    f"For {key} {cat}, {limit} is using {DEFAULT_QOS_ID} configured limit"
                 )
                 return limit
 
@@ -735,9 +741,7 @@ class PolicyGenerator:
 
 
 # we query violates from redis and send back policies to haproxies
-def check_loop(
-    policy_generator: PolicyGenerator, redis_key_type: str, sleep_time_milliseconds: int
-) -> None:
+def check_loop(policy_generator: PolicyGenerator, sleep_time_milliseconds: int) -> None:
     avg_pol_gen_loop_run_time_list: list[float] = []
 
     @avg_time(
@@ -750,16 +754,13 @@ def check_loop(
     def check_loop_epoch() -> None:
         epoch_time = time.time()
         epoch_sec = int(epoch_time)
+        started_epoch_time = epoch_time
         cursor = 0
-        if redis_key_type == REDIS_KEY_TYPE_VERB:
-            scan_pattern = f"verb_{epoch_sec}_*"
-        elif redis_key_type == REDIS_KEY_TYPE_CONN:
-            scan_pattern = "conn_*"
-        else:
-            raise ValueError(f"Invalid redis key type: {redis_key_type}")
-
-        all_keys_to_check = set()
+        scan_pattern = "*"
+        all_verb_keys_to_check = set()
+        all_conn_keys_to_check = set()
         while True:
+            redis_scan_result: tuple[int, list[str]] | None = None
             try:
                 redis_scan_result = policy_generator.redis_server.scan(
                     cursor, match=scan_pattern, count=policy_generator.redis_keys_batch
@@ -768,11 +769,13 @@ def check_loop(
                 assert isinstance(redis_scan_result, tuple)
                 assert len(redis_scan_result) == 2
             except Exception as e:
-                policy_generator.logger.warning(
-                    f"Redis SCAN failed with exception: {e}"
+                scan_result_suffix = (
+                    f"; redis_result={redis_scan_result}"
+                    if redis_scan_result is not None
+                    else ""
                 )
                 policy_generator.logger.warning(
-                    f"Redis result for epoch {epoch_sec}: {redis_scan_result}"
+                    f"Redis SCAN failed for epoch {epoch_sec} with exception: {e}{scan_result_suffix}"
                 )
                 # We need to find the cause of the underlying problem if this happens.
                 # We break here since the cursor in redis_scan_result might
@@ -782,18 +785,27 @@ def check_loop(
             epoch_time = time.time()
             if int(epoch_time) != epoch_sec:
                 policy_generator.logger.debug(
-                    f"Redis scan started at {epoch_time} spilled over the next second"
+                    f"Redis scan started at {started_epoch_time} spilled over the next second"
                 )
                 return
 
-            all_keys_to_check.update(redis_scan_result[1])
+            for key in redis_scan_result[1]:
+                if key.startswith(f"verb_{int(started_epoch_time)}_"):
+                    all_verb_keys_to_check.add(key)
+                elif key.startswith("conn_"):
+                    all_conn_keys_to_check.add(key)
+
             cursor = int(redis_scan_result[0])
             if cursor == 0:
                 break
-        if len(all_keys_to_check) > 0:
-            policy_generator.submit_violation_check(
-                list(all_keys_to_check), redis_key_type, epoch_time
-            )
+
+        policy_generator.submit_violation_check(
+            list(all_verb_keys_to_check), REDIS_KEY_TYPE_VERB, epoch_time
+        )
+
+        policy_generator.submit_violation_check(
+            list(all_conn_keys_to_check), REDIS_KEY_TYPE_CONN, epoch_time
+        )
 
     while True:
         # check reload_limits
@@ -928,25 +940,14 @@ if __name__ == "__main__":
         logging.exception(f"Policy Generator initialization failed: {e}")
         raise
 
-    verb_thread = threading.Thread(
+    check_thread = threading.Thread(
         target=check_loop,
         args=(
             policy_generator,
-            REDIS_KEY_TYPE_VERB,
             policy_generator.sleep_time_milliseconds,
         ),
     )
-    verb_thread.start()
-
-    conn_thread = threading.Thread(
-        target=check_loop,
-        args=(
-            policy_generator,
-            REDIS_KEY_TYPE_CONN,
-            policy_generator.sleep_time_milliseconds,
-        ),
-    )
-    conn_thread.start()
+    check_thread.start()
 
     demand_thread = threading.Thread(
         target=demand_check_loop,
@@ -958,5 +959,4 @@ if __name__ == "__main__":
     demand_thread.start()
 
     demand_thread.join()
-    verb_thread.join()
-    conn_thread.join()
+    check_thread.join()

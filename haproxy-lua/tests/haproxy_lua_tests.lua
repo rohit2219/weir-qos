@@ -23,7 +23,7 @@ mock_applet = {
     getline = function(self)
         local result = self.lines[1]
         if #self.lines == 0 then
-            return nil
+            return ""
         end
         table.remove(self.lines, 1)
         return result
@@ -118,6 +118,16 @@ test_ingest_policies_successfully_parses_limit_share_updates = function()
     })
 end
 
+test_ingest_policies_gracefully_recovers_from_unexpected_end_of_stream_in_policy_message = function()
+    mock_applet.lines = {
+        "policies",
+    }
+    limit_share_updates = {}
+
+    ingest_policies(mock_applet)
+    -- We just need it to not fail and not infinite loop
+end
+
 test_ingest_policies_ignores_remaining_limit_share_updates_when_one_is_too_short = function()
     mock_applet.lines = {
         "limit_share",
@@ -202,4 +212,22 @@ test_ingest_policies_gracefully_recovers_from_unexpected_end_of_limit_share_mess
     })
 end
 
+<<<<<<< HEAD
+=======
+test_ingest_policies_gracefully_recovers_from_unexpected_end_of_stream_in_limit_share_message = function()
+    mock_applet.lines = {
+        "limit_share",
+        "12345,key1,fff1_dwn_64",
+    }
+    limit_share_updates = {}
+
+    ingest_policies(mock_applet)
+    -- We need it to not fail and not infinite loop
+
+    lu.assertEquals(limit_share_updates, {
+        {12345, "key1", "fff1", "dwn", 64},
+    })
+end
+
+>>>>>>> remotes/upstream/main
 os.exit(lu.LuaUnit.run())
