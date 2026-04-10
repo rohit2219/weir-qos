@@ -434,7 +434,6 @@ void Processor::processReqEnd(std::string_view raw_input) {
 void Processor::processStsTokenRoleMapping(std::string_view raw_input) {
     // ststokenrole~|~<XML response>~|~arn:aws:sts::RGW98092190014291922:assumed-role/S3AccessCephEg/R4
     StringSplit split(raw_input, DELIMITER);
-    m_logger->info("rohit processStsTokenRoleMapping raw_input: {}", raw_input);
     split.next(); // Skip past the 'ststokenrole' prefix
     const std::string_view xml_body = split.next();
     const std::string_view role_arn = split.next();
@@ -494,7 +493,6 @@ void Processor::processStsTokenVerb(std::string_view raw_input) {
     // Takes care of accumilating the VERB counts(GET,PUT etc) for a token in its role level
     // req_ststoken~|~1.2.3.4:58840~|~STSTOKENABCDE~|~PUT~|~up~|~instance1234~|~7~|~LISTBUCKETS
     // Note: the last token (LISTBUCKETS) may be empty
-    m_logger->info("rohit stsTokenVerb raw_input: {}", raw_input);
 
     StringSplit split(raw_input, DELIMITER);
     std::array<std::string_view, static_cast<size_t>(StsToken::Count)> tokens;
@@ -521,8 +519,7 @@ void Processor::processStsTokenVerb(std::string_view raw_input) {
     const std::string user_role = ""; // replace it with redis get command
  
     const auto ststoken_cache_key = fmt::v10::format("roleverb_{}_{}_{}_{}", direction, instance_id, user_role, m_endpoint); // key will be like roleverb_up_instance1234_arn:aws:sts::123:role/S3Access_dev.dc 
-    m_logger->info("success !!!! rohit Enqueuing STS role metric with key: {} and len: {}", ststoken_cache_key, 1);
-    enqueueStsRoleMetric(ststoken_cache_key, 1);
+    //enqueueStsRoleMetric(ststoken_cache_key, 1);
     
     return;
 }
@@ -530,7 +527,6 @@ void Processor::processStsTokenVerb(std::string_view raw_input) {
 void Processor::processStsTokenDataXfer(std::string_view raw_input) {
     // data_xfer_ststoken~|~1.2.3.4:55094~|~TOKENABCDE~|~dwn~|~4096
     StringSplit split(raw_input, DELIMITER);
-    m_logger->info("rohit stsTokenDataXfer raw_input: {}", raw_input);
     split.next(); // Skip past the 'data_xfer' prefix
     const std::string_view source = split.next();
     const std::string_view sts_token = split.next();
@@ -553,8 +549,7 @@ void Processor::processStsTokenDataXfer(std::string_view raw_input) {
 
     const std::string user_role = ""; // replace it with redis get command
     const auto ststoken_cache_key = fmt::v10::format("role_data_xfer_{}_{}${}", direction, user_role, m_endpoint); // key will be like role_data_xfer_dwn_arn:aws:sts::123:role/S3Access$dev.dc 
-    m_logger->info("success !!!! rohit Enqueuing STS role metric with key: {} and len: {}", ststoken_cache_key, len);
-    enqueueStsRoleMetric(ststoken_cache_key, len);
+    //enqueueStsRoleMetric(ststoken_cache_key, len);
     return;
 }
 
