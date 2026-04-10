@@ -212,8 +212,6 @@ test_ingest_policies_gracefully_recovers_from_unexpected_end_of_limit_share_mess
     })
 end
 
-<<<<<<< HEAD
-=======
 test_ingest_policies_gracefully_recovers_from_unexpected_end_of_stream_in_limit_share_message = function()
     mock_applet.lines = {
         "limit_share",
@@ -229,5 +227,4 @@ test_ingest_policies_gracefully_recovers_from_unexpected_end_of_stream_in_limit_
     })
 end
 
->>>>>>> remotes/upstream/main
 os.exit(lu.LuaUnit.run())
