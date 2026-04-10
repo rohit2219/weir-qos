@@ -51,7 +51,7 @@ ARG git_proxy
 WORKDIR /workspace
 RUN <<EOF
     apt-get update
-    apt-get install -y --no-install-recommends cmake g++ make git ca-certificates
+    apt-get install -y --no-install-recommends cmake g++ make git ca-certificates netcat-openbsd
     apt-get clean
     rm -rf /var/lib/apt/lists/*  # Remove the apt cache lists to keep image size down
 EOF

@@ -33,12 +33,18 @@ FORWARD_DECLARE_TEST(redis_cmd_key, keys_are_not_equivalent_when_timestamps_diff
 
 constexpr inline std::string_view DELIMITER = "~|~";
 constexpr inline std::chrono::seconds STATS_LOG_INTERVAL(30);
+constexpr inline int DEFAULT_STS_TOKEN_ROLE_TTL = 12 * 3600; // 12 hours, in seconds current
 
 struct RawEvents {
     static constexpr const char* reqStart() { return "req~|~"; }
     static constexpr const char* reqEnd() { return "req_end~|~"; }
     static constexpr const char* dataXfer() { return "data_xfer~|~"; }
     static constexpr const char* activeReqs() { return "active_reqs~|~"; }
+    static constexpr const char* stsTokenRoleMapping() { return "role_ststoken~|~"; }
+    static constexpr const char* stsTokenVerb() { return "req_ststoken~|~"; }    
+    static constexpr const char* stsTokenReqEnd() { return "req_end_ststoken~|~"; }    
+    static constexpr const char* stsTokenDataXfer() { return "data_xfer_ststoken~|~"; }  
+    static constexpr const char* stsTokenActiveReqs() { return "active_reqs_ststoken~|~"; }     
 };
 
 // Orchestrates processing of messages from HAProxy.
@@ -128,7 +134,12 @@ class Processor {
     void processDataXfer(std::string_view raw_input);
     void processActiveRequests(std::string_view raw_input);
     void processReqEnd(std::string_view raw_input);
-
+    void processStsTokenRoleMapping(std::string_view raw_input);
+    void processStsTokenVerb(std::string_view raw_input);
+    void processStsTokenDataXfer(std::string_view raw_input);
+    void processStsTokenActiveReqs(std::string_view raw_input);
+    void enqueueStsRoleMetric(const std::string& sts_key, int amount);
+    
     // Consumes the HAProxy messages added into the `message_queue` by the main
     // thread (see syslog_server.cpp::msgProducerThread), turns them into commands
     // that can be forwarded to redis, and periodically sends all buffered commands

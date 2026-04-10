@@ -26,7 +26,7 @@ typedef enum { RL_UPLOAD, RL_DOWNLOAD } DataDirection;
 typedef enum { RL_THROTTLE, RL_NO_THROTTLE } ThrottleFlag;
 void rl_request_end(struct sockaddr_in* addr_in);
 int rl_speed_throttle(struct sockaddr_in* addr_in, DataDirection data_direction);
-void rl_data_transferred(struct sockaddr_in* addr_in, DataDirection data_direction, unsigned int done);
+void rl_data_transferred(struct sockaddr_in* addr_in, DataDirection data_direction, unsigned int done, const char* sts_transaction_key);
 void set_jitter_range(uint32_t range);
 void set_throttle_epoch_us(const char* key, uint64_t epoch_us, DataDirection data_direction, float diff_ratio);
 void set_ip_port_key(const char* ip, const char* port, const char* key);

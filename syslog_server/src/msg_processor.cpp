@@ -30,6 +30,18 @@ enum class RequestToken {
     Count // Sentinel value for the number of tokens
 };
 
+enum class StsToken {
+    Source,
+    SourcePort,
+    StsTkn,
+    Verb,
+    Direction,
+    InstanceId,
+    ActiveRequests,
+    RequestClass,
+    Count // Sentinel value for the number of tokens
+};
+
 bool isPrintableASCII(const std::string_view key) {
     return std::all_of(key.begin(), key.end(), [](char c) { return std::isprint(static_cast<unsigned char>(c)); });
 }
@@ -38,6 +50,21 @@ uint32_t getEpochSecs(const std::chrono::system_clock::time_point& time_point) {
     return std::chrono::duration_cast<std::chrono::seconds>(time_point.time_since_epoch()).count();
 }
 } // namespace
+
+// Extracts the text content between an XML open and close tag from the given input.
+// Returns std::nullopt if either tag is not found.
+std::optional<std::string_view> extractXmlTagValue(std::string_view xml, std::string_view open_tag, std::string_view close_tag) {
+    const auto start_pos = xml.find(open_tag);
+    if (start_pos == std::string_view::npos) {
+        return std::nullopt;
+    }
+    const auto value_start = start_pos + open_tag.size();
+    const auto end_pos = xml.find(close_tag, value_start);
+    if (end_pos == std::string_view::npos) {
+        return std::nullopt;
+    }
+    return xml.substr(value_start, end_pos - value_start);
+}
 
 namespace syslogsrv {
 
@@ -185,6 +212,15 @@ void Processor::messageConsumerThread(std::stop_token stop) {
                 processActiveRequests(buffer);
             } else if (buffer.find(RawEvents::reqEnd(), 0) == 0) {
                 processReqEnd(buffer);
+            }
+            else if (buffer.find(RawEvents::stsTokenRoleMapping(), 0) == 0) {
+                processStsTokenRoleMapping(buffer);
+            } else if (buffer.find(RawEvents::stsTokenVerb(), 0) == 0) {
+                processStsTokenVerb(buffer);
+            } else if (buffer.find(RawEvents::stsTokenDataXfer(), 0) == 0) {
+                processStsTokenDataXfer(buffer);
+            } else if (buffer.find(RawEvents::stsTokenActiveReqs(), 0) == 0) {
+                processStsTokenActiveReqs(buffer);
             } else {
                 m_logger->info("Unrecognized message:{}", buffer);
             }
@@ -394,6 +430,136 @@ void Processor::processReqEnd(std::string_view raw_input) {
     m_qos_redis_active_reqs[conn_key] = active_requests;
 
     ++m_qos_not_send_count;
+}
+void Processor::processStsTokenRoleMapping(std::string_view raw_input) {
+    // ststokenrole~|~<XML response>~|~arn:aws:sts::RGW98092190014291922:assumed-role/S3AccessCephEg/R4
+    StringSplit split(raw_input, DELIMITER);
+    m_logger->info("rohit processStsTokenRoleMapping raw_input: {}", raw_input);
+    split.next(); // Skip past the 'ststokenrole' prefix
+    const std::string_view xml_body = split.next();
+    const std::string_view role_arn = split.next();
+    const auto arn = extractXmlTagValue(xml_body, "<Arn>", "</Arn>");
+    if (!arn) {
+        m_logger->error("Missing Arn in ststokenrole. In case of many such occurrences, investigate further for data issues");
+        return;
+    }
+
+    const auto session_token = extractXmlTagValue(xml_body, "<SessionToken>", "</SessionToken>");
+    if (!session_token) {
+        m_logger->error("Missing SessionToken in ststokenrole. Investigate further for data issues {}", *arn);
+        return;
+    }
+
+    m_logger->info("Extracted Arn: {}", *arn);
+    m_logger->info("Extracted SessionToken: {}", *session_token);
+
+    // Creating keys for Redis
+    // token to Role mapping with TTL of 12 hours
+    auto ss_cmd_token_role_map = fmt::v10::format("set {} {} EX {}", *session_token, *arn, DEFAULT_STS_TOKEN_ROLE_TTL); 
+    //m_qos_redis_conn->addCommand(ss_cmd_token_role_map);
+
+    auto ss_cmd_role_token_map = fmt::v10::format("sadd tag:{} {}", *arn, *session_token);
+
+
+    auto ss_cmd_role_token_map_expire  = fmt::v10::format("expire tag:{} {}",  *arn, DEFAULT_STS_TOKEN_ROLE_TTL); 
+
+    //m_qos_redis_conn->addCommand(ss_cmd_role_token_map);
+    //m_qos_redis_conn->addCommand(ss_cmd_role_token_map);
+    //m_qos_redis_conn->addCommand(ss_cmd_role_token_map_expire);
+
+    // Periodic cleanup of old set members will be done
+    
+    // Pushing to redis code will be added in next PR
+    return;
+}
+
+void Processor::enqueueStsRoleMetric(const std::string& sts_key, int amount) {
+    const uint32_t epoch_secs = getEpochSecs(m_time.now());
+    // This command will record the VERB/Bandwidth usage in a sec 
+    auto cmd_incr = fmt::v10::format("incrby {} {}", sts_key, amount);
+    //m_qos_redis_conn->addCommand(cmd_incr);
+
+    // This command will add the key to a secondary index set for which epoch secs is the key 
+    auto cmd_tag = fmt::v10::format("sadd tag:sts_epoch_tag_{} {}", epoch_secs, sts_key);
+    //m_qos_redis_conn->addCommand(cmd_tag);
+
+    // Set expiry for the set and role key
+    auto cmd_token_expire = fmt::v10::format("expire {} {}", sts_key, DEFAULT_STS_TOKEN_ROLE_TTL);
+    //m_qos_redis_conn->addCommand(cmd_token_expire);
+    auto cmd_set_expire = fmt::v10::format("expire tag:sts_epoch_tag_{} {}", epoch_secs, DEFAULT_STS_TOKEN_ROLE_TTL); 
+    //m_qos_redis_conn->addCommand(cmd_set_expire);
+}
+
+void Processor::processStsTokenVerb(std::string_view raw_input) {
+    // Takes care of accumilating the VERB counts(GET,PUT etc) for a token in its role level
+    // req_ststoken~|~1.2.3.4:58840~|~STSTOKENABCDE~|~PUT~|~up~|~instance1234~|~7~|~LISTBUCKETS
+    // Note: the last token (LISTBUCKETS) may be empty
+    m_logger->info("rohit stsTokenVerb raw_input: {}", raw_input);
+
+    StringSplit split(raw_input, DELIMITER);
+    std::array<std::string_view, static_cast<size_t>(StsToken::Count)> tokens;
+    for (int i = 0; i < static_cast<int>(StsToken::Count); ++i) {
+        tokens[i] = split.next();
+    }
+    if (!split.finishedSuccessfully()) {
+        m_logger->error("Unexpected request format: {}", raw_input);
+        return;
+    }
+
+    const auto sts_token = tokens[static_cast<size_t>(StsToken::StsTkn)];
+    if (!isPrintableASCII(sts_token)) {
+        m_logger->error("Invalid StsToken key: {}", sts_token);
+        return;
+    }
+
+    const std::string_view verb = tokens[static_cast<size_t>(StsToken::Verb)];
+    const std::string_view direction = tokens[static_cast<size_t>(StsToken::Direction)];
+    const std::string_view instance_id = tokens[static_cast<size_t>(StsToken::InstanceId)];
+    const std::string_view request_class = tokens[static_cast<size_t>(StsToken::RequestClass)];
+    const std::string user_role_cmd = fmt::v10::format("get tok_to_role_map_{}", sts_token);
+    
+    const std::string user_role = ""; // replace it with redis get command
+ 
+    const auto ststoken_cache_key = fmt::v10::format("roleverb_{}_{}_{}_{}", direction, instance_id, user_role, m_endpoint); // key will be like roleverb_up_instance1234_arn:aws:sts::123:role/S3Access_dev.dc 
+    m_logger->info("success !!!! rohit Enqueuing STS role metric with key: {} and len: {}", ststoken_cache_key, 1);
+    enqueueStsRoleMetric(ststoken_cache_key, 1);
+    
+    return;
+}
+
+void Processor::processStsTokenDataXfer(std::string_view raw_input) {
+    // data_xfer_ststoken~|~1.2.3.4:55094~|~TOKENABCDE~|~dwn~|~4096
+    StringSplit split(raw_input, DELIMITER);
+    m_logger->info("rohit stsTokenDataXfer raw_input: {}", raw_input);
+    split.next(); // Skip past the 'data_xfer' prefix
+    const std::string_view source = split.next();
+    const std::string_view sts_token = split.next();
+    const std::string_view direction = split.next();
+    const std::string_view len_str = split.next();
+    int len = 0;
+    const auto len_convert_result = std::from_chars(len_str.begin(), len_str.end(), len);
+    if (!split.finishedSuccessfully() || (len_convert_result.ec != std::errc{})) {
+        m_logger->error("Unexpected data_xfer format: {}", raw_input);
+        return;
+    }
+    if (!isPrintableASCII(sts_token)) {
+        m_logger->error("Invalid token key: {}", sts_token);
+        return;
+    }
+
+    if (sts_token.empty()) {
+        return;
+    }
+
+    const std::string user_role = ""; // replace it with redis get command
+    const auto ststoken_cache_key = fmt::v10::format("role_data_xfer_{}_{}${}", direction, user_role, m_endpoint); // key will be like role_data_xfer_dwn_arn:aws:sts::123:role/S3Access$dev.dc 
+    m_logger->info("success !!!! rohit Enqueuing STS role metric with key: {} and len: {}", ststoken_cache_key, len);
+    enqueueStsRoleMetric(ststoken_cache_key, len);
+    return;
+}
+
+void Processor::processStsTokenActiveReqs(std::string_view raw_input) {
+    return;
 }
 
 } // namespace syslogsrv

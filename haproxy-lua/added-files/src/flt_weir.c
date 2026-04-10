@@ -20,6 +20,7 @@
 #include <haproxy/global.h>
 #include <haproxy/http-t.h>
 #include <haproxy/http_ana-t.h>
+#include <haproxy/http_htx.h>
 #include <haproxy/http_rules.h>
 #include <haproxy/log.h>
 #include <haproxy/proxy.h>
@@ -105,6 +106,7 @@ struct weir_lim_state {
     char* limit_key;
     char* request_class;
     char* bandwidth_limit_direction;
+    char* sts_token;
     unsigned int next_allowed_send_tick;
     bool enabled;
     bool headers_processed;
@@ -179,6 +181,22 @@ int weir_ingest_limit_share_update(uint64_t timestamp, const char* user_key, con
     HA_RWLOCK_WRUNLOCK(OTHER_LOCK, &g_filter->state_lock);
 
     return 1;
+}
+
+// Returns only the first x-amz-security-token value.
+// Empty or missing token returns an empty ist.
+static struct ist sts_transaction_key(struct http_msg* msg) {
+    struct htx* htx = htxbuf(&msg->chn->buf);
+    struct http_hdr_ctx ctx = {.blk = NULL};
+
+    if (http_find_header(htx, ist("x-amz-security-token"), &ctx, 0) && (ctx.value.len > 0)) {
+        send_log(NULL, LOG_INFO, "sts_transaction_key: found x-amz-security-token len=%u", (unsigned int)ctx.value.len);
+        return ctx.value;
+    }
+
+    send_log(NULL, LOG_INFO, "sts_transaction_key: x-amz-security-token not found");
+
+    return ist("");
 }
 
 /***************************************************************************
@@ -331,6 +349,8 @@ static int weir_http_headers(struct stream* s, struct filter* filter, struct htt
     CHECK_IF(s->txn == NULL);
     if (st->enabled && is_request && (s->txn != NULL) && (st->remote_addr != NULL)) {
         int active_requests = 0;
+        const char* request_class = "";
+        struct ist sts_token;
 
         // We need to flag that we've actually processed a request because this callback always runs after all of
         // the frontend lua/config processing is complete, but won't run if the request has been rejected.
@@ -357,6 +377,20 @@ static int weir_http_headers(struct stream* s, struct filter* filter, struct htt
         send_log(NULL, LOG_INFO, "req~|~%s:%d~|~%s~|~%s~|~%s~|~%s~|~%d~|~%s", inet_ntoa(st->remote_addr->sin_addr),
                  ntohs(st->remote_addr->sin_port), st->limit_key, method_name(s->txn->meth),
                  st->bandwidth_limit_direction, conf->instance_id, active_requests, request_class);
+        sts_token = sts_transaction_key(msg);
+        if (sts_token.len > 0) {
+
+            char* token_copy = calloc((size_t)sts_token.len + 1, 1);
+            if (token_copy != NULL) {
+                // caching the token in the filter state for use in payload processing (header values are not necessarily present while processing payload)
+                memcpy(token_copy, sts_token.ptr, (size_t)sts_token.len);
+                ha_free(&st->sts_token);
+                st->sts_token = token_copy;
+                send_log(NULL, LOG_INFO, "req_ststoken~|~%s:%d~|~%.*s~|~%s~|~%s~|~%s~|~%d~|~%s",
+                            inet_ntoa(st->remote_addr->sin_addr), ntohs(st->remote_addr->sin_port),
+                    (int)sts_token.len, sts_token.ptr, method_name(s->txn->meth),
+                    st->bandwidth_limit_direction, conf->instance_id, active_requests, request_class);
+        }                 
     }
 
     msg->chn->analyse_exp = TICK_ETERNITY;
@@ -432,6 +466,8 @@ static int weir_http_payload(struct stream* s, struct filter* filter, struct htt
     struct weir_lim_state* st = filter->ctx;
     const DataDirection direction = (msg->chn == &s->req) ? RL_UPLOAD : RL_DOWNLOAD;
     int bytes_to_forward = 0;
+    struct ist sts_token;
+    const char* token_for_log = NULL;
 
     WEIR_BUG_ON(!st->enabled); // We should only be registering the data callback when enabling the filter
     if (st->remote_addr == NULL) {
@@ -475,7 +511,12 @@ static int weir_http_payload(struct stream* s, struct filter* filter, struct htt
             }
         } else {
             bytes_to_forward = len;
-            rl_data_transferred(st->remote_addr, direction, len);
+            sts_token = sts_transaction_key(msg);
+            token_for_log = st->sts_token;
+            if ((token_for_log == NULL) && (sts_token.len > 0)) {
+                token_for_log = sts_token.ptr;
+            } 
+            rl_data_transferred(st->remote_addr, direction, len, token_for_log);
         }
     }
 
