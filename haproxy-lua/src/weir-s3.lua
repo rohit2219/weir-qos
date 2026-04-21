@@ -275,13 +275,6 @@ function sts_qos_populate_txn_context(txn)
             end
         end
     end
-    -- for printing the STS tokens when a client uses them
-    local req_headers = txn.http:req_get_headers()
-    if is_sts_credential_req(req_headers) == 1 then
-        -- Commenting out temporarily to prevent possible cred leaks 
-        --core.Info("accesskeyid-ststoken~|~"..req_headers['authorization'][0].."~|~"..req_headers['x-amz-security-token'][0])
-        core.Info("accesskeyid-ststoken~|~accesskeyststoken to follow")
-    end
 end
 
 core.register_action("sts_qos_populate_txn_context", { "http-req" }, sts_qos_populate_txn_context)
