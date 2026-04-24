@@ -194,28 +194,6 @@ function TestStsQosPopulateTxnContext:test_does_not_set_if_body_parse_when_body_
     lu.assertNil(txn:get_var("txn.if_body_parse"))
 end
 
-function TestStsQosPopulateTxnContext:test_logs_sts_token_when_present()
-    local logged_messages = {}
-    core.Info = function(msg) table.insert(logged_messages, msg) end
-
-    local txn = make_mock_txn({
-        content_length = nil,
-        path = "/",
-        req_body_param = nil,
-        headers = {
-            ["x-amz-security-token"] = { [0] = "some-token" },
-            ["authorization"] = { [0] = "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request" },
-        },
-    })
-
-    sts_qos_populate_txn_context(txn)
-
-    lu.assertEquals(#logged_messages, 1)
-    lu.assertStrContains(logged_messages[1], "accesskeyid-ststoken")
-
-    -- Restore original core.Info
-    core.Info = function() return nil end
-end
 -- STS QoS tests ends here 
 
 os.exit(lu.LuaUnit.run())

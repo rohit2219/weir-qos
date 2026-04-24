@@ -11,9 +11,10 @@ constexpr inline int DEFAULT_METRICS_BATCHING_COUNT = 250000;
 constexpr inline int DEFAULT_METRICS_BATCHING_MSEC_PERIOD = 31;
 constexpr inline int DEFAULT_REDIS_QOS_TTL = 2;
 constexpr inline int DEFAULT_REDIS_QOS_CONN_TTL = 60;
-constexpr inline int DEFAULT_REDIS_STS_QOS_TTL = 3; // Increase it slightly as there are more data intensive ops in STS-QoS and we want to avoid possible race conditions due to TTL expiry during sweeping the STS Keys
+constexpr inline int DEFAULT_REDIS_STS_QOS_TTL = 3; // Increase it slightly as there are more data intensive ops in STS-QoS and
+                                                    // we want to avoid possible race conditions due to TTL expiry during sweeping the STS Keys
 constexpr inline int DEFAULT_CHECK_CONN_INTERVAL_SECS = 5;
-constexpr inline int DEFAULT_MSG_QUEUE_SIZE = 2048; // Increase as a precautionary measure to accomodate more STS Tokens traffic that can come in.
+constexpr inline int DEFAULT_MSG_QUEUE_SIZE = 2048; // Increase as a precautionary measure to accomodate more STS Tokens traffic.
 
 // message processor configuration options
 constexpr inline char CONFIG_ACCESS_LOG_FILE_NAME[] = "access_log_file_name";

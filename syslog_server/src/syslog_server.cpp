@@ -189,9 +189,6 @@ void msgProducerThread(int sock, Processor::FIFOList& queue, std::shared_ptr<spd
             pos = buf_view.find(RawEvents::activeReqs());
         }
         if (pos == std::string_view::npos) {
-            pos = buf_view.find(RawEvents::reqEnd());
-        }
-        if (pos == std::string_view::npos) {
             pos = buf_view.find(RawEvents::stsTokenRoleMapping());
         }
         if (pos == std::string_view::npos) {
@@ -202,7 +199,7 @@ void msgProducerThread(int sock, Processor::FIFOList& queue, std::shared_ptr<spd
         }
         if (pos == std::string_view::npos) {
             pos = buf_view.find(RawEvents::stsTokenActiveReqs());
-        }        
+        }
         if (pos != std::string_view::npos) {
             std::string_view data_start = buf_view.substr(pos);
             if (!queue.try_enqueue(std::string(data_start))) {

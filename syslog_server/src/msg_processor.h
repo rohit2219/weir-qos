@@ -29,11 +29,20 @@ FORWARD_DECLARE_TEST(redis_cmd_key, different_timestamps_produce_different_hashe
 FORWARD_DECLARE_TEST(redis_cmd_key, different_categories_produce_different_hashes);
 FORWARD_DECLARE_TEST(redis_cmd_key, keys_are_equivalent_when_timestamps_differ_slightly_within_a_second);
 FORWARD_DECLARE_TEST(redis_cmd_key, keys_are_not_equivalent_when_timestamps_differ_slightly_across_seconds);
+FORWARD_DECLARE_TEST(msg_processor, processStsTokenVerb_valid_input);
+FORWARD_DECLARE_TEST(msg_processor, processStsTokenVerb_malformed_input);
+FORWARD_DECLARE_TEST(msg_processor, processStsTokenVerb_invalid_token);
+FORWARD_DECLARE_TEST(msg_processor, processStsTokenDataXfer_valid_input);
+FORWARD_DECLARE_TEST(msg_processor, processStsTokenDataXfer_malformed_input);
+FORWARD_DECLARE_TEST(msg_processor, processStsTokenDataXfer_empty_token);
+FORWARD_DECLARE_TEST(msg_processor, processStsTokenRoleMapping_valid_input);
+FORWARD_DECLARE_TEST(msg_processor, processStsTokenRoleMapping_missing_arn);
+FORWARD_DECLARE_TEST(msg_processor, processStsTokenRoleMapping_missing_session_token);
 } // namespace test
 
 constexpr inline std::string_view DELIMITER = "~|~";
 constexpr inline std::chrono::seconds STATS_LOG_INTERVAL(30);
-constexpr inline int DEFAULT_STS_TOKEN_ROLE_TTL = 12 * 3600; // 12 hours, in seconds current
+constexpr inline int DEFAULT_STS_TOKEN_ROLE_TTL = 12 * 3600; // 12 hours, in seconds current max ttl for STS tokens
 
 struct RawEvents {
     static constexpr const char* reqStart() { return "req~|~"; }
@@ -41,10 +50,10 @@ struct RawEvents {
     static constexpr const char* dataXfer() { return "data_xfer~|~"; }
     static constexpr const char* activeReqs() { return "active_reqs~|~"; }
     static constexpr const char* stsTokenRoleMapping() { return "role_ststoken~|~"; }
-    static constexpr const char* stsTokenVerb() { return "req_ststoken~|~"; }    
-    static constexpr const char* stsTokenReqEnd() { return "req_end_ststoken~|~"; }    
-    static constexpr const char* stsTokenDataXfer() { return "data_xfer_ststoken~|~"; }  
-    static constexpr const char* stsTokenActiveReqs() { return "active_reqs_ststoken~|~"; }     
+    static constexpr const char* stsTokenVerb() { return "req_ststoken~|~"; }
+    static constexpr const char* stsTokenReqEnd() { return "req_end_ststoken~|~"; }
+    static constexpr const char* stsTokenDataXfer() { return "data_xfer_ststoken~|~"; }
+    static constexpr const char* stsTokenActiveReqs() { return "active_reqs_ststoken~|~"; }
 };
 
 // Orchestrates processing of messages from HAProxy.
@@ -73,7 +82,16 @@ class Processor {
     FRIEND_TEST(test::redis_cmd_key, different_categories_produce_different_hashes);
     FRIEND_TEST(test::redis_cmd_key, keys_are_equivalent_when_timestamps_differ_slightly_within_a_second);
     FRIEND_TEST(test::redis_cmd_key, keys_are_not_equivalent_when_timestamps_differ_slightly_across_seconds);
-
+    FRIEND_TEST(test::msg_processor, processStsTokenVerb_valid_input);
+    FRIEND_TEST(test::msg_processor, processStsTokenVerb_malformed_input);
+    FRIEND_TEST(test::msg_processor, processStsTokenVerb_invalid_token);
+    FRIEND_TEST(test::msg_processor, processStsTokenDataXfer_valid_input);
+    FRIEND_TEST(test::msg_processor, processStsTokenDataXfer_malformed_input);
+    FRIEND_TEST(test::msg_processor, processStsTokenDataXfer_empty_token);
+    FRIEND_TEST(test::msg_processor, processStsTokenRoleMapping_valid_input);
+    FRIEND_TEST(test::msg_processor, processStsTokenRoleMapping_missing_arn);
+    FRIEND_TEST(test::msg_processor, processStsTokenRoleMapping_missing_session_token);
+    
     struct RedisCmdKey {
         std::string m_user;
         std::chrono::system_clock::time_point m_timestamp;
@@ -139,7 +157,7 @@ class Processor {
     void processStsTokenDataXfer(std::string_view raw_input);
     void processStsTokenActiveReqs(std::string_view raw_input);
     void enqueueStsRoleMetric(const std::string& sts_key, int amount);
-    
+
     // Consumes the HAProxy messages added into the `message_queue` by the main
     // thread (see syslog_server.cpp::msgProducerThread), turns them into commands
     // that can be forwarded to redis, and periodically sends all buffered commands

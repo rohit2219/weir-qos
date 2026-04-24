@@ -20,7 +20,6 @@
 #include <haproxy/global.h>
 #include <haproxy/http-t.h>
 #include <haproxy/http_ana-t.h>
-#include <haproxy/http_htx.h>
 #include <haproxy/http_rules.h>
 #include <haproxy/log.h>
 #include <haproxy/proxy.h>
@@ -183,22 +182,6 @@ int weir_ingest_limit_share_update(uint64_t timestamp, const char* user_key, con
     return 1;
 }
 
-// Returns only the first x-amz-security-token value.
-// Empty or missing token returns an empty ist.
-static struct ist sts_transaction_key(struct http_msg* msg) {
-    struct htx* htx = htxbuf(&msg->chn->buf);
-    struct http_hdr_ctx ctx = {.blk = NULL};
-
-    if (http_find_header(htx, ist("x-amz-security-token"), &ctx, 0) && (ctx.value.len > 0)) {
-        send_log(NULL, LOG_INFO, "sts_transaction_key: found x-amz-security-token len=%u", (unsigned int)ctx.value.len);
-        return ctx.value;
-    }
-
-    send_log(NULL, LOG_INFO, "sts_transaction_key: x-amz-security-token not found");
-
-    return ist("");
-}
-
 /***************************************************************************
  * Hooks that manage the filter lifecycle (init/check/deinit)
  **************************************************************************/
@@ -331,6 +314,7 @@ static void weir_detach(struct stream* s, struct filter* filter) {
     ha_free(&st->limit_key);     // This could be null if we rejected the request before attaching to it
     ha_free(&st->request_class); // This could be null
     ha_free(&st->bandwidth_limit_direction);
+    ha_free(&st->sts_token);
     pool_free(pool_head_weir_lim_state, st);
     filter->ctx = NULL;
 }
@@ -349,8 +333,6 @@ static int weir_http_headers(struct stream* s, struct filter* filter, struct htt
     CHECK_IF(s->txn == NULL);
     if (st->enabled && is_request && (s->txn != NULL) && (st->remote_addr != NULL)) {
         int active_requests = 0;
-        const char* request_class = "";
-        struct ist sts_token;
 
         // We need to flag that we've actually processed a request because this callback always runs after all of
         // the frontend lua/config processing is complete, but won't run if the request has been rejected.
@@ -377,20 +359,12 @@ static int weir_http_headers(struct stream* s, struct filter* filter, struct htt
         send_log(NULL, LOG_INFO, "req~|~%s:%d~|~%s~|~%s~|~%s~|~%s~|~%d~|~%s", inet_ntoa(st->remote_addr->sin_addr),
                  ntohs(st->remote_addr->sin_port), st->limit_key, method_name(s->txn->meth),
                  st->bandwidth_limit_direction, conf->instance_id, active_requests, request_class);
-        sts_token = sts_transaction_key(msg);
-        if (sts_token.len > 0) {
-
-            char* token_copy = calloc((size_t)sts_token.len + 1, 1);
-            if (token_copy != NULL) {
-                // caching the token in the filter state for use in payload processing (header values are not necessarily present while processing payload)
-                memcpy(token_copy, sts_token.ptr, (size_t)sts_token.len);
-                ha_free(&st->sts_token);
-                st->sts_token = token_copy;
-                send_log(NULL, LOG_INFO, "req_ststoken~|~%s:%d~|~%.*s~|~%s~|~%s~|~%s~|~%d~|~%s",
-                            inet_ntoa(st->remote_addr->sin_addr), ntohs(st->remote_addr->sin_port),
-                    (int)sts_token.len, sts_token.ptr, method_name(s->txn->meth),
-                    st->bandwidth_limit_direction, conf->instance_id, active_requests, request_class);
-        }                 
+        if (st->sts_token != NULL) {
+            send_log(NULL, LOG_INFO, "req_ststoken~|~%s:%d~|~%s~|~%s~|~%s~|~%s~|~%d~|~%s",
+                     inet_ntoa(st->remote_addr->sin_addr), ntohs(st->remote_addr->sin_port),
+                     st->sts_token, method_name(s->txn->meth),
+                     st->bandwidth_limit_direction, conf->instance_id, active_requests, request_class);
+        }
     }
 
     msg->chn->analyse_exp = TICK_ETERNITY;
@@ -466,8 +440,6 @@ static int weir_http_payload(struct stream* s, struct filter* filter, struct htt
     struct weir_lim_state* st = filter->ctx;
     const DataDirection direction = (msg->chn == &s->req) ? RL_UPLOAD : RL_DOWNLOAD;
     int bytes_to_forward = 0;
-    struct ist sts_token;
-    const char* token_for_log = NULL;
 
     WEIR_BUG_ON(!st->enabled); // We should only be registering the data callback when enabling the filter
     if (st->remote_addr == NULL) {
@@ -511,12 +483,7 @@ static int weir_http_payload(struct stream* s, struct filter* filter, struct htt
             }
         } else {
             bytes_to_forward = len;
-            sts_token = sts_transaction_key(msg);
-            token_for_log = st->sts_token;
-            if ((token_for_log == NULL) && (sts_token.len > 0)) {
-                token_for_log = sts_token.ptr;
-            } 
-            rl_data_transferred(st->remote_addr, direction, len, token_for_log);
+            rl_data_transferred(st->remote_addr, direction, len, st->sts_token);
         }
     }
 
@@ -635,6 +602,15 @@ static enum act_return weir_enable_filter(struct act_rule* rule, struct proxy* p
         }
     }
 
+    // --- Parse and store: sts-token ---
+    if (rule->arg.act.p[3]) {
+        smp = sample_fetch_as_type(px, sess, s, sample_options, rule->arg.act.p[3], SMP_T_STR);
+        if (smp && smp->data.u.str.area && smp->data.u.str.data > 0) {
+            ha_free(&st->sts_token);
+            st->sts_token = strdup(smp->data.u.str.area);
+        }
+    }
+
     // Apply the filter to data transferred both for the request and response
     register_data_filter(s, &s->req, filter);
     register_data_filter(s, &s->res, filter);
@@ -645,6 +621,7 @@ static enum act_return weir_enable_filter(struct act_rule* rule, struct proxy* p
     WEIR_BUG_ON(st->limit_key == NULL);
 
     HA_RWLOCK_WRLOCK(OTHER_LOCK, &conf->state_lock);
+
     iter = kh_get(user_limit_hashtable_type, conf->user_limit_state, st->limit_key);
     if (iter == kh_end(conf->user_limit_state)) {
         int insert_result;
@@ -710,10 +687,14 @@ static void release_weir_action(struct act_rule* rule) {
         release_sample_expr(rule->arg.act.p[2]);
         rule->arg.act.p[2] = NULL;
     }
+    if (rule->arg.act.p[3]) {
+        release_sample_expr(rule->arg.act.p[3]);
+        rule->arg.act.p[3] = NULL;
+    }
 }
 
 /* Parse "activate-weir" action with named arguments.
- * Supported keys: user-key, operation-class, operation-direction
+ * Supported keys: user-key, operation-class, operation-direction, sts-token
  * Returns ACT_RET_PRS_OK on success, ACT_RET_PRS_ERR on error.
  */
 static enum act_parse_ret activate_weir_limit(const char** args, int* orig_arg, struct proxy* px, struct act_rule* rule,
@@ -749,11 +730,12 @@ static enum act_parse_ret activate_weir_limit(const char** args, int* orig_arg, 
     rule->arg.act.p[0] = NULL; // user-key
     rule->arg.act.p[1] = NULL; // operation-class
     rule->arg.act.p[2] = NULL; // operation-direction
+    rule->arg.act.p[3] = NULL; // sts-token
 
     while (*args[cur_arg]) {
         const char* arg_name = args[cur_arg];
         if ((strcmp(arg_name, "user-key") != 0) && (strcmp(arg_name, "operation-class") != 0) &&
-            (strcmp(arg_name, "operation-direction") != 0)) {
+            (strcmp(arg_name, "operation-direction") != 0) && (strcmp(arg_name, "sts-token") != 0)) {
             // We've parsed passed all the expected tokens, stop here so that we don't interfere with the rest of the
             // expression (namely for adding a condition to this config line).
             break;
@@ -780,6 +762,8 @@ static enum act_parse_ret activate_weir_limit(const char** args, int* orig_arg, 
             rule->arg.act.p[1] = expr;
         } else if (strcmp(arg_name, "operation-direction") == 0) {
             rule->arg.act.p[2] = expr;
+        } else if (strcmp(arg_name, "sts-token") == 0) {
+            rule->arg.act.p[3] = expr;
         } else {
             memprintf(err, "Unrecognized argument name: '%s'", arg_name);
             release_sample_expr(expr);

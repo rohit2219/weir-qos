@@ -236,6 +236,7 @@ core.register_fetches("weir_should_block_s3_request", function(txn)
     return weir_should_block_request(txn, access_key, op_class)
 end)
 
+-- STS QoS changes start here
 function is_sts_credential_req(headers)
     local sec_header=headers['x-amz-security-token']
     if  sec_header ~= nil then
@@ -249,6 +250,14 @@ function is_sts_credential_req(headers)
         return 0
     end
 end
+
+core.register_fetches("sts_qos_get_token", function(txn)
+    local headers = txn.http:req_get_headers()
+    if headers and headers["x-amz-security-token"] and headers["x-amz-security-token"][0] then
+        return headers["x-amz-security-token"][0]
+    end
+    return ""
+end)
 
 function sts_qos_populate_txn_context(txn)
     -- here we are evaluating to see of this is an sts assume role request and if yes, we attach an 
@@ -275,14 +284,62 @@ function sts_qos_populate_txn_context(txn)
             end
         end
     end
-    -- for printing the STS tokens when a client uses them
-    local req_headers = txn.http:req_get_headers()
-    if is_sts_credential_req(req_headers) == 1 then
-        -- Commenting out temporarily to prevent possible cred leaks 
-        --core.Info("accesskeyid-ststoken~|~"..req_headers['authorization'][0].."~|~"..req_headers['x-amz-security-token'][0])
-        core.Info("accesskeyid-ststoken~|~accesskeyststoken to follow")
-    end
 end
 
 core.register_action("sts_qos_populate_txn_context", { "http-req" }, sts_qos_populate_txn_context)
 
+StsFilter = {}
+StsFilter.id = "Lua Sts filter"
+StsFilter.flags = filter.FLT_CFG_FL_HTX;
+StsFilter.__index = StsFilter
+
+function StsFilter:new()
+    local trace = {}
+    setmetatable(trace, StsFilter)
+    trace.res_len = 0
+    return trace
+end
+
+function is_sts_transaction(txn,chn)
+    if chn:is_resp() then
+        local is_assume_role_setvar_analyze = txn:get_var("txn.is_assume_role")
+        if is_assume_role_setvar_analyze ~= nil then
+            return true
+        end
+    end
+    return false
+end
+
+function StsFilter:start_analyze(txn, chn)
+    if chn and chn:is_resp() then
+        filter.register_data_filter(self, chn)
+    end
+end
+
+function StsFilter:end_analyze(txn, chn)
+    if chn and chn:is_resp() then
+        filter.unregister_data_filter(self,chn)
+    end
+end
+function StsFilter:http_payload(txn, http_msg)
+
+    if http_msg ~= nil and type(http_msg) == "table" then
+        if http_msg.channel ~= nil  and type(http_msg.channel) == "table" then
+            if http_msg.channel:is_resp()  then
+                local is_assume_role_setvar = txn:get_var("txn.is_assume_role")
+                if is_assume_role_setvar ~= nil and type(http_msg.body) == "function" then
+                    -- here we get 930 bytes of the transaction , typically an assume role response is between 900-1000 bytes
+                    local body = http_msg:body(-930)
+                    if body ~= nil and type(body) == "string" and #body > 0 then
+                        core.Info("role_ststoken~|~"..body)
+                    end
+                end
+            end
+        end
+    end
+end
+
+core.register_filter("StsFilter", StsFilter, function(StsFilter, args)
+    return StsFilter
+end)
+-- STS QoS changes end here
