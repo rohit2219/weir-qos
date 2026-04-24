@@ -473,7 +473,7 @@ void Processor::processStsTokenRoleMapping(std::string_view raw_input) {
     return;
 }
 
-void Processor::processStsTokenVerb(std::string_view raw_input) {
+void Processor::enqueueStsRoleMetric(const std::string& sts_key, int amount) {
     const uint32_t epoch_secs = getEpochSecs(m_time.now());
     // This command will record the VERB/Bandwidth usage in a sec
     auto cmd_incr = fmt::v10::format("incrby {} {}", sts_key, amount);
