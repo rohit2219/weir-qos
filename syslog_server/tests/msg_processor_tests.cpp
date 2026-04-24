@@ -138,9 +138,17 @@ TEST(redis_cmd_key, keys_are_not_equivalent_when_timestamps_differ_slightly_acro
 class StsMsgProcessorTest : public ::testing::Test {
   protected:
     void SetUp() override {
+        // The Processor constructor calls spdlog::get(SERVER_NAME), so we must
+        // register a logger under that name before constructing a Processor.
+        if (!spdlog::get(SERVER_NAME)) {
+            spdlog::stdout_logger_mt(SERVER_NAME);
+        }
         logger_ = spdlog::stdout_logger_mt(std::string(SERVER_NAME) + "_sts_" + std::to_string(test_counter_++));
     }
-    void TearDown() override { spdlog::drop(logger_->name()); }
+    void TearDown() override {
+        spdlog::drop(logger_->name());
+        spdlog::drop(SERVER_NAME);
+    }
 
     std::unique_ptr<Processor> makeProcessor() {
         auto net = std::make_unique<testing::StrictMock<MockNetInterface>>();

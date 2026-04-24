@@ -7,6 +7,12 @@ core = {register_fetches = function () return nil end,
         Warning = function(msg) print("WARN: "..msg) return nil end,
     }
 
+-- mock the haproxy filter class
+filter = { FLT_CFG_FL_HTX = 0,
+           register_data_filter = function() return nil end,
+           unregister_data_filter = function() return nil end,
+    }
+
 require("weir-s3")
 local lu = require("luaunit")
 
