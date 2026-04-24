@@ -29,15 +29,16 @@ FORWARD_DECLARE_TEST(redis_cmd_key, different_timestamps_produce_different_hashe
 FORWARD_DECLARE_TEST(redis_cmd_key, different_categories_produce_different_hashes);
 FORWARD_DECLARE_TEST(redis_cmd_key, keys_are_equivalent_when_timestamps_differ_slightly_within_a_second);
 FORWARD_DECLARE_TEST(redis_cmd_key, keys_are_not_equivalent_when_timestamps_differ_slightly_across_seconds);
-FORWARD_DECLARE_TEST(msg_processor, processStsTokenVerb_valid_input);
-FORWARD_DECLARE_TEST(msg_processor, processStsTokenVerb_malformed_input);
-FORWARD_DECLARE_TEST(msg_processor, processStsTokenVerb_invalid_token);
-FORWARD_DECLARE_TEST(msg_processor, processStsTokenDataXfer_valid_input);
-FORWARD_DECLARE_TEST(msg_processor, processStsTokenDataXfer_malformed_input);
-FORWARD_DECLARE_TEST(msg_processor, processStsTokenDataXfer_empty_token);
-FORWARD_DECLARE_TEST(msg_processor, processStsTokenRoleMapping_valid_input);
-FORWARD_DECLARE_TEST(msg_processor, processStsTokenRoleMapping_missing_arn);
-FORWARD_DECLARE_TEST(msg_processor, processStsTokenRoleMapping_missing_session_token);
+FORWARD_DECLARE_TEST(StsMsgProcessorTest, processStsTokenVerb_valid_input);
+FORWARD_DECLARE_TEST(StsMsgProcessorTest, processStsTokenVerb_malformed_input);
+FORWARD_DECLARE_TEST(StsMsgProcessorTest, processStsTokenVerb_invalid_token);
+FORWARD_DECLARE_TEST(StsMsgProcessorTest, processStsTokenDataXfer_valid_input);
+FORWARD_DECLARE_TEST(StsMsgProcessorTest, processStsTokenDataXfer_malformed_input);
+FORWARD_DECLARE_TEST(StsMsgProcessorTest, processStsTokenDataXfer_empty_token);
+FORWARD_DECLARE_TEST(StsMsgProcessorTest, processStsTokenRoleMapping_valid_input);
+FORWARD_DECLARE_TEST(StsMsgProcessorTest, processStsTokenRoleMapping_missing_arn);
+FORWARD_DECLARE_TEST(StsMsgProcessorTest, processStsTokenRoleMapping_missing_session_token);
+class StsMsgProcessorTest;
 } // namespace test
 
 constexpr inline std::string_view DELIMITER = "~|~";
@@ -82,16 +83,17 @@ class Processor {
     FRIEND_TEST(test::redis_cmd_key, different_categories_produce_different_hashes);
     FRIEND_TEST(test::redis_cmd_key, keys_are_equivalent_when_timestamps_differ_slightly_within_a_second);
     FRIEND_TEST(test::redis_cmd_key, keys_are_not_equivalent_when_timestamps_differ_slightly_across_seconds);
-    FRIEND_TEST(test::msg_processor, processStsTokenVerb_valid_input);
-    FRIEND_TEST(test::msg_processor, processStsTokenVerb_malformed_input);
-    FRIEND_TEST(test::msg_processor, processStsTokenVerb_invalid_token);
-    FRIEND_TEST(test::msg_processor, processStsTokenDataXfer_valid_input);
-    FRIEND_TEST(test::msg_processor, processStsTokenDataXfer_malformed_input);
-    FRIEND_TEST(test::msg_processor, processStsTokenDataXfer_empty_token);
-    FRIEND_TEST(test::msg_processor, processStsTokenRoleMapping_valid_input);
-    FRIEND_TEST(test::msg_processor, processStsTokenRoleMapping_missing_arn);
-    FRIEND_TEST(test::msg_processor, processStsTokenRoleMapping_missing_session_token);
-    
+    FRIEND_TEST(test::StsMsgProcessorTest, processStsTokenVerb_valid_input);
+    FRIEND_TEST(test::StsMsgProcessorTest, processStsTokenVerb_malformed_input);
+    FRIEND_TEST(test::StsMsgProcessorTest, processStsTokenVerb_invalid_token);
+    FRIEND_TEST(test::StsMsgProcessorTest, processStsTokenDataXfer_valid_input);
+    FRIEND_TEST(test::StsMsgProcessorTest, processStsTokenDataXfer_malformed_input);
+    FRIEND_TEST(test::StsMsgProcessorTest, processStsTokenDataXfer_empty_token);
+    FRIEND_TEST(test::StsMsgProcessorTest, processStsTokenRoleMapping_valid_input);
+    FRIEND_TEST(test::StsMsgProcessorTest, processStsTokenRoleMapping_missing_arn);
+    FRIEND_TEST(test::StsMsgProcessorTest, processStsTokenRoleMapping_missing_session_token);
+    friend class test::StsMsgProcessorTest;
+
     struct RedisCmdKey {
         std::string m_user;
         std::chrono::system_clock::time_point m_timestamp;

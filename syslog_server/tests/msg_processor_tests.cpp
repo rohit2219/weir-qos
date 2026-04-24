@@ -140,17 +140,14 @@ class StsMsgProcessorTest : public ::testing::Test {
     void SetUp() override {
         logger_ = spdlog::stdout_logger_mt(std::string(SERVER_NAME) + "_sts_" + std::to_string(test_counter_++));
     }
-    void TearDown() override {
-        spdlog::drop(logger_->name());
-    }
+    void TearDown() override { spdlog::drop(logger_->name()); }
 
     std::unique_ptr<Processor> makeProcessor() {
         auto net = std::make_unique<testing::StrictMock<MockNetInterface>>();
         EXPECT_CALL(*net, redisAsyncFree).WillRepeatedly(testing::Return());
-        const std::string config_yaml =
-            "{ redis_check_conn_interval_sec: 30, endpoint: localdev.dockerdc, "
-            "redis_server: localhost:9004, redis_qos_ttl: 2, "
-            "redis_qos_conn_ttl: 60, reqs_queue_drop_percentage_when_full: 20 }";
+        const std::string config_yaml = "{ redis_check_conn_interval_sec: 30, endpoint: localdev.dockerdc, "
+                                        "redis_server: localhost:9004, redis_qos_ttl: 2, "
+                                        "redis_qos_conn_ttl: 60, reqs_queue_drop_percentage_when_full: 20 }";
         const YAML::Node config = YAML::Load(config_yaml);
         auto proc = std::make_unique<Processor>(mq_, config, 0, time_, std::move(net));
         // Override the logger so the processor uses the test-specific one
@@ -189,8 +186,7 @@ TEST_F(StsMsgProcessorTest, processStsTokenVerb_malformed_input) {
 TEST_F(StsMsgProcessorTest, processStsTokenVerb_invalid_token) {
     auto proc = makeProcessor();
     // Token with non-printable characters
-    const std::string input =
-        "req_ststoken~|~1.2.3.4:58840~|~BAD\x01TOKEN~|~PUT~|~up~|~instance1234~|~7~|~LISTBUCKETS";
+    const std::string input = "req_ststoken~|~1.2.3.4:58840~|~BAD\x01TOKEN~|~PUT~|~up~|~instance1234~|~7~|~LISTBUCKETS";
     proc->processStsTokenVerb(input);
     // Should log error about invalid token and return without crashing
 }
@@ -221,28 +217,23 @@ TEST_F(StsMsgProcessorTest, processStsTokenDataXfer_empty_token) {
 
 TEST_F(StsMsgProcessorTest, processStsTokenRoleMapping_valid_input) {
     auto proc = makeProcessor();
-    const std::string xml_body =
-        "<AssumeRoleResponse><Credentials>"
-        "<SessionToken>FwoGZXIvYXdzEBYaDHqa</SessionToken>"
-        "</Credentials><AssumedRoleUser>"
-        "<Arn>arn:aws:sts::123456:assumed-role/S3Access/session1</Arn>"
-        "</AssumedRoleUser></AssumeRoleResponse>";
+    const std::string xml_body = "<AssumeRoleResponse><Credentials>"
+                                 "<SessionToken>FwoGZXIvYXdzEBYaDHqa</SessionToken>"
+                                 "</Credentials><AssumedRoleUser>"
+                                 "<Arn>arn:aws:sts::123456:assumed-role/S3Access/session1</Arn>"
+                                 "</AssumedRoleUser></AssumeRoleResponse>";
     const std::string input =
-        std::string("role_ststoken~|~") + xml_body +
-        "~|~arn:aws:sts::123456:assumed-role/S3Access/session1";
+        std::string("role_ststoken~|~") + xml_body + "~|~arn:aws:sts::123456:assumed-role/S3Access/session1";
     proc->processStsTokenRoleMapping(input);
 }
 
 TEST_F(StsMsgProcessorTest, processStsTokenRoleMapping_missing_arn) {
     auto proc = makeProcessor();
     // XML without <Arn> tag
-    const std::string xml_body =
-        "<AssumeRoleResponse><Credentials>"
-        "<SessionToken>FwoGZXIvYXdzEBYaDHqa</SessionToken>"
-        "</Credentials></AssumeRoleResponse>";
-    const std::string input =
-        std::string("role_ststoken~|~") + xml_body +
-        "~|~some-role-arn";
+    const std::string xml_body = "<AssumeRoleResponse><Credentials>"
+                                 "<SessionToken>FwoGZXIvYXdzEBYaDHqa</SessionToken>"
+                                 "</Credentials></AssumeRoleResponse>";
+    const std::string input = std::string("role_ststoken~|~") + xml_body + "~|~some-role-arn";
     proc->processStsTokenRoleMapping(input);
     // Should log error about missing Arn and return
 }
@@ -250,13 +241,11 @@ TEST_F(StsMsgProcessorTest, processStsTokenRoleMapping_missing_arn) {
 TEST_F(StsMsgProcessorTest, processStsTokenRoleMapping_missing_session_token) {
     auto proc = makeProcessor();
     // XML with Arn but no SessionToken
-    const std::string xml_body =
-        "<AssumeRoleResponse><AssumedRoleUser>"
-        "<Arn>arn:aws:sts::123456:assumed-role/S3Access/session1</Arn>"
-        "</AssumedRoleUser></AssumeRoleResponse>";
+    const std::string xml_body = "<AssumeRoleResponse><AssumedRoleUser>"
+                                 "<Arn>arn:aws:sts::123456:assumed-role/S3Access/session1</Arn>"
+                                 "</AssumedRoleUser></AssumeRoleResponse>";
     const std::string input =
-        std::string("role_ststoken~|~") + xml_body +
-        "~|~arn:aws:sts::123456:assumed-role/S3Access/session1";
+        std::string("role_ststoken~|~") + xml_body + "~|~arn:aws:sts::123456:assumed-role/S3Access/session1";
     proc->processStsTokenRoleMapping(input);
     // Should log error about missing SessionToken and return
 }

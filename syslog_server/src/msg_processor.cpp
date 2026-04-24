@@ -1,6 +1,10 @@
 // Copyright 2024 Bloomberg Finance L.P.
 // Distributed under the terms of the Apache 2.0 license.
 
+#include "msg_processor.h"
+#include "common.h"
+#include "processor_config.h"
+#include "stringsplit.h"
 #include <algorithm>
 #include <cctype>
 #include <charconv>
@@ -11,10 +15,6 @@
 #include <string>
 #include <thread>
 #include <unordered_set>
-#include "common.h"
-#include "msg_processor.h"
-#include "processor_config.h"
-#include "stringsplit.h"
 
 namespace {
 // Define an enum or struct to give names to the tokens
@@ -457,18 +457,18 @@ void Processor::processStsTokenRoleMapping(std::string_view raw_input) {
     // Creating keys for Redis
     // token to Role mapping with TTL of 12 hours
     auto ss_cmd_token_role_map = fmt::v10::format("set {} {} EX {}", *session_token, *arn, DEFAULT_STS_TOKEN_ROLE_TTL);
-    //m_qos_redis_conn->addCommand(ss_cmd_token_role_map);
+    // m_qos_redis_conn->addCommand(ss_cmd_token_role_map);
 
     auto ss_cmd_role_token_map = fmt::v10::format("sadd tag:{} {}", *arn, *session_token);
 
     auto ss_cmd_role_token_map_expire = fmt::v10::format("expire tag:{} {}", *arn, DEFAULT_STS_TOKEN_ROLE_TTL);
 
-    //m_qos_redis_conn->addCommand(ss_cmd_role_token_map);
-    //m_qos_redis_conn->addCommand(ss_cmd_role_token_map);
-    //m_qos_redis_conn->addCommand(ss_cmd_role_token_map_expire);
+    // m_qos_redis_conn->addCommand(ss_cmd_role_token_map);
+    // m_qos_redis_conn->addCommand(ss_cmd_role_token_map);
+    // m_qos_redis_conn->addCommand(ss_cmd_role_token_map_expire);
 
     // Periodic cleanup of old set members will be done
-    
+
     // Pushing to redis code will be added in next PR
     return;
 }
@@ -477,17 +477,17 @@ void Processor::enqueueStsRoleMetric(const std::string& sts_key, int amount) {
     const uint32_t epoch_secs = getEpochSecs(m_time.now());
     // This command will record the VERB/Bandwidth usage in a sec
     auto cmd_incr = fmt::v10::format("incrby {} {}", sts_key, amount);
-    //m_qos_redis_conn->addCommand(cmd_incr);
+    // m_qos_redis_conn->addCommand(cmd_incr);
 
     // This command will add the key to a secondary index set for which epoch secs is the key
     auto cmd_tag = fmt::v10::format("sadd tag:sts_epoch_tag_{} {}", epoch_secs, sts_key);
-    //m_qos_redis_conn->addCommand(cmd_tag);
+    // m_qos_redis_conn->addCommand(cmd_tag);
 
     // Set expiry for the set and role key
     auto cmd_token_expire = fmt::v10::format("expire {} {}", sts_key, DEFAULT_STS_TOKEN_ROLE_TTL);
-    //m_qos_redis_conn->addCommand(cmd_token_expire);
+    // m_qos_redis_conn->addCommand(cmd_token_expire);
     auto cmd_set_expire = fmt::v10::format("expire tag:sts_epoch_tag_{} {}", epoch_secs, DEFAULT_STS_TOKEN_ROLE_TTL);
-    //m_qos_redis_conn->addCommand(cmd_set_expire);
+    // m_qos_redis_conn->addCommand(cmd_set_expire);
 }
 
 void Processor::processStsTokenVerb(std::string_view raw_input) {
@@ -519,8 +519,10 @@ void Processor::processStsTokenVerb(std::string_view raw_input) {
 
     const std::string user_role = ""; // replace it with redis get command
 
-    const auto ststoken_cache_key = fmt::v10::format("roleverb_{}_{}_{}_{}", direction, instance_id, user_role, m_endpoint); // key will be like roleverb_up_instance1234_arn:aws:sts::123:role/S3Access_dev.dc
-    //enqueueStsRoleMetric(ststoken_cache_key, 1);
+    const auto ststoken_cache_key =
+        fmt::v10::format("roleverb_{}_{}_{}_{}", direction, instance_id, user_role,
+                         m_endpoint); // key will be like roleverb_up_instance1234_arn:aws:sts::123:role/S3Access_dev.dc
+    // enqueueStsRoleMetric(ststoken_cache_key, 1);
 
     return;
 }
@@ -549,13 +551,13 @@ void Processor::processStsTokenDataXfer(std::string_view raw_input) {
     }
 
     const std::string user_role = ""; // replace it with redis get command
-    const auto ststoken_cache_key = fmt::v10::format("role_data_xfer_{}_{}${}", direction, user_role, m_endpoint); // key will be like role_data_xfer_dwn_arn:aws:sts::123:role/S3Access$dev.dc
-    //enqueueStsRoleMetric(ststoken_cache_key, len);
+    const auto ststoken_cache_key =
+        fmt::v10::format("role_data_xfer_{}_{}${}", direction, user_role,
+                         m_endpoint); // key will be like role_data_xfer_dwn_arn:aws:sts::123:role/S3Access$dev.dc
+    // enqueueStsRoleMetric(ststoken_cache_key, len);
     return;
 }
 
-void Processor::processStsTokenActiveReqs(std::string_view raw_input) {
-    return;
-}
+void Processor::processStsTokenActiveReqs(std::string_view raw_input) { return; }
 
 } // namespace syslogsrv
