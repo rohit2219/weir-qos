@@ -361,9 +361,9 @@ static int weir_http_headers(struct stream* s, struct filter* filter, struct htt
                  st->bandwidth_limit_direction, conf->instance_id, active_requests, request_class);
         if (st->sts_token != NULL) {
             send_log(NULL, LOG_INFO, "req_ststoken~|~%s:%d~|~%s~|~%s~|~%s~|~%s~|~%d~|~%s",
-                     inet_ntoa(st->remote_addr->sin_addr), ntohs(st->remote_addr->sin_port),
-                     st->sts_token, method_name(s->txn->meth),
-                     st->bandwidth_limit_direction, conf->instance_id, active_requests, request_class);
+                     inet_ntoa(st->remote_addr->sin_addr), ntohs(st->remote_addr->sin_port), st->sts_token,
+                     method_name(s->txn->meth), st->bandwidth_limit_direction, conf->instance_id, active_requests,
+                     request_class);
         }
     }
 

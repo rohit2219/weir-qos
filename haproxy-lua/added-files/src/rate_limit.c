@@ -375,7 +375,8 @@ int rl_speed_throttle(struct sockaddr_in* addr_in, DataDirection data_direction)
     return RL_THROTTLE;
 }
 
-void rl_data_transferred(struct sockaddr_in* addr_in, DataDirection data_direction, unsigned int done, const char* sts_transaction_key) {
+void rl_data_transferred(struct sockaddr_in* addr_in, DataDirection data_direction, unsigned int done,
+                         const char* sts_transaction_key) {
     uint64_t ip_port;
     kh_cstr_t access_key;
 
@@ -397,8 +398,8 @@ void rl_data_transferred(struct sockaddr_in* addr_in, DataDirection data_directi
              (data_direction == RL_DOWNLOAD ? "dwn" : "up"), LOG_DELIMITER, done);
     if (sts_transaction_key) {
         send_log(NULL, LOG_INFO, "data_xfer_ststoken%s%s:%d%s%s%s%s%s%u", LOG_DELIMITER, inet_ntoa(addr_in->sin_addr),
-                ntohs(addr_in->sin_port), LOG_DELIMITER, sts_transaction_key ? sts_transaction_key : "", LOG_DELIMITER,
-                (data_direction == RL_DOWNLOAD ? "dwn" : "up"), LOG_DELIMITER, done);
+                 ntohs(addr_in->sin_port), LOG_DELIMITER, sts_transaction_key ? sts_transaction_key : "", LOG_DELIMITER,
+                 (data_direction == RL_DOWNLOAD ? "dwn" : "up"), LOG_DELIMITER, done);
     }
 }
 
