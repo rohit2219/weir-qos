@@ -178,6 +178,191 @@ function TestStsQosPopulateTxnContext:test_does_not_set_if_body_parse_when_body_
     lu.assertNil(txn:get_var("txn.if_body_parse"))
 end
 
+-- Tests for StsFilter:http_payload
+
+TestStsFilterHttpPayload = {}
+
+local function make_mock_http_msg(opts)
+    return {
+        channel = {
+            is_resp = function() return opts.is_resp end,
+        },
+        body = function(self, len)
+            return opts.body
+        end,
+    }
+end
+
+local function make_mock_filter_txn(opts)
+    local vars = {}
+    if opts.if_body_parse then
+        vars["txn.if_body_parse"] = opts.if_body_parse
+    end
+    return {
+        get_var = function(self, name)
+            return vars[name]
+        end,
+        set_var = function(self, name, value)
+            vars[name] = value
+        end,
+    }
+end
+
+function TestStsFilterHttpPayload:test_emits_log_for_assume_role_response()
+    local logged = {}
+    core.Info = function(msg) table.insert(logged, msg) end
+
+    local sts = StsFilter:new()
+    local txn = make_mock_filter_txn({ if_body_parse = "yes" })
+    local http_msg = make_mock_http_msg({
+        is_resp = true,
+        body = "<AssumeRoleResponse><Credentials><SessionToken>tok123</SessionToken></Credentials>"
+              .. "<AssumedRoleUser><Arn>arn:aws:sts::123:assumed-role/S3Access/sess</Arn></AssumedRoleUser></AssumeRoleResponse>",
+    })
+
+    sts:http_payload(txn, http_msg)
+
+    lu.assertEquals(#logged, 1)
+    lu.assertStrContains(logged[1], "role_ststoken~|~")
+    lu.assertStrContains(logged[1], "<SessionToken>tok123</SessionToken>")
+
+    core.Info = function(msg) print("INFO: "..msg) return nil end
+end
+
+function TestStsFilterHttpPayload:test_no_log_when_if_body_parse_not_set()
+    local logged = {}
+    core.Info = function(msg) table.insert(logged, msg) end
+
+    local sts = StsFilter:new()
+    local txn = make_mock_filter_txn({})
+    local http_msg = make_mock_http_msg({
+        is_resp = true,
+        body = "<AssumeRoleResponse>some body</AssumeRoleResponse>",
+    })
+
+    sts:http_payload(txn, http_msg)
+
+    lu.assertEquals(#logged, 0)
+
+    core.Info = function(msg) print("INFO: "..msg) return nil end
+end
+
+function TestStsFilterHttpPayload:test_no_log_when_not_response_channel()
+    local logged = {}
+    core.Info = function(msg) table.insert(logged, msg) end
+
+    local sts = StsFilter:new()
+    local txn = make_mock_filter_txn({ if_body_parse = "yes" })
+    local http_msg = make_mock_http_msg({
+        is_resp = false,
+        body = "<AssumeRoleResponse>some body</AssumeRoleResponse>",
+    })
+
+    sts:http_payload(txn, http_msg)
+
+    lu.assertEquals(#logged, 0)
+
+    core.Info = function(msg) print("INFO: "..msg) return nil end
+end
+
+function TestStsFilterHttpPayload:test_no_log_when_body_is_nil()
+    local logged = {}
+    core.Info = function(msg) table.insert(logged, msg) end
+
+    local sts = StsFilter:new()
+    local txn = make_mock_filter_txn({ if_body_parse = "yes" })
+    local http_msg = make_mock_http_msg({
+        is_resp = true,
+        body = nil,
+    })
+
+    sts:http_payload(txn, http_msg)
+
+    lu.assertEquals(#logged, 0)
+
+    core.Info = function(msg) print("INFO: "..msg) return nil end
+end
+
+function TestStsFilterHttpPayload:test_no_log_when_body_is_empty()
+    local logged = {}
+    core.Info = function(msg) table.insert(logged, msg) end
+
+    local sts = StsFilter:new()
+    local txn = make_mock_filter_txn({ if_body_parse = "yes" })
+    local http_msg = make_mock_http_msg({
+        is_resp = true,
+        body = "",
+    })
+
+    sts:http_payload(txn, http_msg)
+
+    lu.assertEquals(#logged, 0)
+
+    core.Info = function(msg) print("INFO: "..msg) return nil end
+end
+
+function TestStsFilterHttpPayload:test_no_log_when_http_msg_is_nil()
+    local logged = {}
+    core.Info = function(msg) table.insert(logged, msg) end
+
+    local sts = StsFilter:new()
+    local txn = make_mock_filter_txn({ if_body_parse = "yes" })
+
+    sts:http_payload(txn, nil)
+
+    lu.assertEquals(#logged, 0)
+
+    core.Info = function(msg) print("INFO: "..msg) return nil end
+end
+
+-- Tests for StsFilter:start_analyze
+
+TestStsFilterStartAnalyze = {}
+
+function TestStsFilterStartAnalyze:test_registers_data_filter_for_response_when_body_parse_set()
+    local registered = false
+    filter.register_data_filter = function(self, chn) registered = true end
+
+    local sts = StsFilter:new()
+    local txn = make_mock_filter_txn({ if_body_parse = "yes" })
+    local chn = { is_resp = function() return true end }
+
+    sts:start_analyze(txn, chn)
+
+    lu.assertTrue(registered)
+
+    filter.register_data_filter = function(self, chn) end
+end
+
+function TestStsFilterStartAnalyze:test_does_not_register_for_request_channel()
+    local registered = false
+    filter.register_data_filter = function(self, chn) registered = true end
+
+    local sts = StsFilter:new()
+    local txn = make_mock_filter_txn({ if_body_parse = "yes" })
+    local chn = { is_resp = function() return false end }
+
+    sts:start_analyze(txn, chn)
+
+    lu.assertFalse(registered)
+
+    filter.register_data_filter = function(self, chn) end
+end
+
+function TestStsFilterStartAnalyze:test_does_not_register_when_body_parse_not_set()
+    local registered = false
+    filter.register_data_filter = function(self, chn) registered = true end
+
+    local sts = StsFilter:new()
+    local txn = make_mock_filter_txn({})
+    local chn = { is_resp = function() return true end }
+
+    sts:start_analyze(txn, chn)
+
+    lu.assertFalse(registered)
+
+    filter.register_data_filter = function(self, chn) end
+end
 -- STS QoS tests ends here 
 
 os.exit(lu.LuaUnit.run())
