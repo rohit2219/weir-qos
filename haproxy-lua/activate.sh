@@ -48,11 +48,10 @@ if ! git -C "$HAPROXY_SOURCE_DIR" config --get user.name; then
     git -C "$HAPROXY_SOURCE_DIR" config --local user.email haproxybuild@example.com
 fi
 
-# Apply our set of patches one at a time, refreshing the git index between
-# each to work around stat-cache staleness on Docker volume mounts (macOS).
-for patch in "$SCRIPT_DIR"/patches/*; do
-    git -C "$HAPROXY_SOURCE_DIR" update-index --refresh || true
-    git -C "$HAPROXY_SOURCE_DIR" am --3way "$(realpath "$patch")"
-done
+# Apply our set of patches.
+# We specifically *do* want the realpath output to be split on the
+# line below so that git will apply all the patches for us.
+# shellcheck disable=SC2046
+git -C "$HAPROXY_SOURCE_DIR" am  $(realpath "$SCRIPT_DIR"/patches/*)
 
 echo "Activation complete"
