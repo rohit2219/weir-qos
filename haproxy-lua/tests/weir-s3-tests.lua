@@ -213,7 +213,8 @@ function TestStsFilterHttpPayload:test_emits_log_for_assume_role_response()
     core.Info = function(msg) table.insert(logged, msg) end
 
     local sts = StsFilter:new()
-    local txn = make_mock_filter_txn({ if_body_parse = "yes" })
+    local txn = make_mock_filter_txn({})
+    txn:set_var("txn.is_assume_role", "yes")
     local http_msg = make_mock_http_msg({
         is_resp = true,
         body = "<AssumeRoleResponse><Credentials><SessionToken>tok123</SessionToken></Credentials>"
@@ -349,7 +350,7 @@ function TestStsFilterStartAnalyze:test_does_not_register_for_request_channel()
     filter.register_data_filter = function(self, chn) end
 end
 
-function TestStsFilterStartAnalyze:test_does_not_register_when_body_parse_not_set()
+function TestStsFilterStartAnalyze:test_registers_for_response_even_when_body_parse_not_set()
     local registered = false
     filter.register_data_filter = function(self, chn) registered = true end
 
@@ -359,7 +360,7 @@ function TestStsFilterStartAnalyze:test_does_not_register_when_body_parse_not_se
 
     sts:start_analyze(txn, chn)
 
-    lu.assertFalse(registered)
+    lu.assertTrue(registered)
 
     filter.register_data_filter = function(self, chn) end
 end
