@@ -64,29 +64,6 @@ test_get_access_key_from_query_string = {}
     end
 
 -- STS QoS tests starts here 
--- Tests for is_sts_credential_req
-
-TestIfStsCredentialReq = {}
-
-function TestIfStsCredentialReq:test_returns_1_when_security_token_header_present()
-    local headers = {
-        ["x-amz-security-token"] = { [0] = "some-sts-token-value" }
-    }
-    lu.assertEquals(is_sts_credential_req(headers), 1)
-end
-
-function TestIfStsCredentialReq:test_returns_0_when_no_security_token_header()
-    local headers = {
-        ["authorization"] = { [0] = "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request" }
-    }
-    lu.assertEquals(is_sts_credential_req(headers), 0)
-end
-
-function TestIfStsCredentialReq:test_returns_0_when_empty_headers()
-    local headers = {}
-    lu.assertEquals(is_sts_credential_req(headers), 0)
-end
-
 -- Tests for sts_qos_populate_txn_context
 
 TestStsQosPopulateTxnContext = {}

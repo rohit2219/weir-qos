@@ -237,20 +237,6 @@ core.register_fetches("weir_should_block_s3_request", function(txn)
 end)
 
 -- STS QoS changes start here
-function is_sts_credential_req(headers)
-    local sec_header=headers['x-amz-security-token']
-    if  sec_header ~= nil then
-        local sts_header=headers['x-amz-security-token'][0]
-        if sts_header ~= nil then
-          return 1
-        else
-          return 0
-        end
-    else
-        return 0
-    end
-end
-
 core.register_fetches("sts_qos_get_token", function(txn)
     local headers = txn.http:req_get_headers()
     if headers and headers["x-amz-security-token"] and headers["x-amz-security-token"][0] then
@@ -298,16 +284,6 @@ function StsFilter:new()
     setmetatable(trace, StsFilter)
     trace.res_len = 0
     return trace
-end
-
-function is_sts_transaction(txn,chn)
-    if chn:is_resp() then
-        local is_assume_role_setvar_analyze = txn:get_var("txn.is_assume_role")
-        if is_assume_role_setvar_analyze ~= nil then
-            return true
-        end
-    end
-    return false
 end
 
 function StsFilter:start_analyze(txn, chn)
