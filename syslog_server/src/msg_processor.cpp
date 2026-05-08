@@ -451,9 +451,6 @@ void Processor::processStsTokenRoleMapping(std::string_view raw_input) {
         return;
     }
 
-    m_logger->info("Extracted Arn: {}", *arn);
-    m_logger->info("Extracted SessionToken: {}", *session_token);
-
     // Creating keys for Redis
     // token to Role mapping with TTL of 12 hours
     auto ss_cmd_token_role_map = fmt::v10::format("set {} {} EX {}", *session_token, *arn, DEFAULT_STS_TOKEN_ROLE_TTL);
