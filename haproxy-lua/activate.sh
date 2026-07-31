@@ -1,8 +1,16 @@
 #!/usr/bin/bash
 
 set -e
-
-WEIR_HAPROXY_BASE_COMMIT=v3.3.0
+WEIR_HAPROXY_BASE_COMMIT=v3.2.15
+# Use the major.minor series (for example, 3.3) for the upstream repo name.
+# Accept commit tags in form v<major>.<minor>.<patch> or <major>.<minor>.<patch>.
+if [[ "$WEIR_HAPROXY_BASE_COMMIT" =~ ^v?([0-9]+\.[0-9]+)\.[0-9]+$ ]]; then
+    WEIR_HAPROXY_SERIES=${BASH_REMATCH[1]}
+else
+    echo "Invalid WEIR_HAPROXY_BASE_COMMIT: $WEIR_HAPROXY_BASE_COMMIT"
+    echo "Expected format: [v]<major>.<minor>.<patch> (for example, v3.3.6 or 3.3.6)"
+    exit 1
+fi
 SCRIPT_DIR=$(dirname "$0")
 HAPROXY_SOURCE_DIR=$SCRIPT_DIR/haproxy-source
 
@@ -10,7 +18,7 @@ HAPROXY_SOURCE_DIR=$SCRIPT_DIR/haproxy-source
 if [[ -d "$HAPROXY_SOURCE_DIR" ]]; then
     echo "HAProxy directory already exists @ $HAPROXY_SOURCE_DIR, skipping clone step..."
 else
-    git clone "${WEIR_HAPROXY_REPO_URL:-https://github.com/haproxy/haproxy.git}" "$HAPROXY_SOURCE_DIR"
+    git clone "${WEIR_HAPROXY_REPO_URL:-https://git.haproxy.org/git/haproxy-$WEIR_HAPROXY_SERIES.git}" "$HAPROXY_SOURCE_DIR"
 fi
 
 if (! git -C  "$HAPROXY_SOURCE_DIR" diff --quiet) || (! git -C  "$HAPROXY_SOURCE_DIR" diff --staged --quiet); then
@@ -20,8 +28,26 @@ fi
 
 # Store the commit on which our local changes are based, so that we know which commits need to be
 # turned into patches when we later run the `deactivate` script.
-git -C  "$HAPROXY_SOURCE_DIR" checkout $WEIR_HAPROXY_BASE_COMMIT
-git -C  "$HAPROXY_SOURCE_DIR" show-ref -s $WEIR_HAPROXY_BASE_COMMIT > "$SCRIPT_DIR"/.haproxy-activated-commit
+HAPROXY_BASE_REF="$WEIR_HAPROXY_BASE_COMMIT"
+
+# Ensure the requested base ref exists locally before checkout.
+# If missing, fetch tags from the upstream series repo and retry once.
+if ! git -C "$HAPROXY_SOURCE_DIR" rev-parse --verify --quiet "$HAPROXY_BASE_REF^{commit}" >/dev/null; then
+    SERIES_REPO_URL="https://git.haproxy.org/git/haproxy-$WEIR_HAPROXY_SERIES.git"
+    ORIGIN_URL=$(git -C "$HAPROXY_SOURCE_DIR" config --get remote.origin.url || true)
+    echo "HAProxy base ref '$HAPROXY_BASE_REF' not found in '$ORIGIN_URL'. Fetching tags from '$SERIES_REPO_URL'..."
+    git -C "$HAPROXY_SOURCE_DIR" fetch --tags "$SERIES_REPO_URL"
+
+    # Fail fast if the ref still does not resolve after tag refresh.
+    if ! git -C "$HAPROXY_SOURCE_DIR" rev-parse --verify --quiet "$HAPROXY_BASE_REF^{commit}" >/dev/null; then
+        echo "Unable to resolve HAProxy base ref '$HAPROXY_BASE_REF'."
+        echo "If this is a new release, update WEIR_HAPROXY_BASE_COMMIT to a ref that exists in upstream."
+        exit 1
+    fi
+fi
+
+git -C "$HAPROXY_SOURCE_DIR" checkout "$HAPROXY_BASE_REF"
+git -C "$HAPROXY_SOURCE_DIR" rev-parse "$HAPROXY_BASE_REF^{commit}" > "$SCRIPT_DIR"/.haproxy-activated-commit
 
 # Enable ** for directory expansion in globs, and allow zero matches to result in an empty list
 shopt -s globstar nullglob
