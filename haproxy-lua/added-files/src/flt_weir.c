@@ -105,7 +105,8 @@ struct weir_lim_state {
     char* limit_key;
     char* request_class;
     char* bandwidth_limit_direction;
-    unsigned int next_allowed_send_tick;
+    unsigned int next_allowed_req_send_tick;
+    unsigned int next_allowed_res_send_tick;
     bool enabled;
     bool headers_processed;
 };
@@ -317,6 +318,24 @@ static void weir_detach(struct stream* s, struct filter* filter) {
     filter->ctx = NULL;
 }
 
+static int weir_http_end(struct stream* s, struct filter* filter, struct http_msg* msg) {
+    // We need to reset this to TICK_ETERNITY so that HAProxy does not think the
+    // filter needs to be called. This callback runs when the HTTP
+    // request/response has been fully processed and all data has been forwarded,
+    // meaning we're finished with this filter. Resetting analyse_exp here
+    // provides some fallback protection against scenarios where we've somehow
+    // finished processing the stream but analyse_exp is still set to a time in
+    // the future. If we didn't reset this here then once that time expired,
+    // HAProxy would continue to try to run this filter but with no data to
+    // forward it would never call the http_payload callback to reset the expiry
+    // meaning it would get stuck trying to run the filter in a loop until a
+    // watchdog timer fired and crashed HAProxy.
+    WEIR_BUG_ON(msg == NULL);
+    WEIR_BUG_ON(msg->chn == NULL);
+    msg->chn->analyse_exp = TICK_ETERNITY;
+    return 1;
+}
+
 /**************************************************************************
  * Hooks to filter HTTP messages
  *************************************************************************/
@@ -432,62 +451,62 @@ static int weir_http_payload(struct stream* s, struct filter* filter, struct htt
     struct weir_lim_state* st = filter->ctx;
     const DataDirection direction = (msg->chn == &s->req) ? RL_UPLOAD : RL_DOWNLOAD;
     int bytes_to_forward = 0;
+    unsigned int* next_allowed_send_tick =
+        (msg->chn == &s->req) ? &st->next_allowed_req_send_tick : &st->next_allowed_res_send_tick;
 
     WEIR_BUG_ON(!st->enabled); // We should only be registering the data callback when enabling the filter
-    if (st->remote_addr == NULL) {
-        bytes_to_forward = len;
-    } else if ((len > 0) &&
-               (!tick_isset(st->next_allowed_send_tick) || tick_is_expired(st->next_allowed_send_tick, now_ms))) {
-        st->next_allowed_send_tick = TICK_ETERNITY;
+    if (!tick_isset(*next_allowed_send_tick) || tick_is_expired(*next_allowed_send_tick, now_ms)) {
+        *next_allowed_send_tick = TICK_ETERNITY;
 
         WEIR_BUG_ON(st->limit == NULL);
         WEIR_BUG_ON(st->bandwidth_limit_direction == NULL);
 
-        // do not proceed with transferring data if we are throttling this connection
-        if (rl_speed_throttle(st->remote_addr, direction) == RL_THROTTLE) {
-            unsigned int* next_tick_ptr = (direction == RL_DOWNLOAD) ? &st->limit->download.next_throttle_log_tick
-                                                                     : &st->limit->upload.next_throttle_log_tick;
-            unsigned int next_throttle_log_tick = HA_ATOMIC_LOAD(next_tick_ptr);
+        if (len > 0) {
+            // Do not proceed with transferring data if we are throttling this connection
+            if ((st->remote_addr != NULL) && rl_speed_throttle(st->remote_addr, direction) == RL_THROTTLE) {
+                unsigned int* next_tick_ptr = (direction == RL_DOWNLOAD) ? &st->limit->download.next_throttle_log_tick
+                                                                         : &st->limit->upload.next_throttle_log_tick;
+                unsigned int next_throttle_log_tick = HA_ATOMIC_LOAD(next_tick_ptr);
 
-            send_log(NULL, LOG_DEBUG, "Throttling %s connection to %s:%u", st->bandwidth_limit_direction,
-                     inet_ntoa(st->remote_addr->sin_addr), ntohs(st->remote_addr->sin_port));
+                send_log(NULL, LOG_DEBUG, "Throttling %s connection to %s:%u", st->bandwidth_limit_direction,
+                         inet_ntoa(st->remote_addr->sin_addr), ntohs(st->remote_addr->sin_port));
 
-            st->next_allowed_send_tick = tick_add(now_ms, MS_TO_TICKS(1));
+                *next_allowed_send_tick = tick_add(now_ms, MS_TO_TICKS(1));
 
-            if (!tick_isset(next_throttle_log_tick) || tick_is_expired(next_throttle_log_tick, now_ms)) {
-                unsigned int new_log_tick = tick_add(now_ms, MS_TO_TICKS(1000));
-                const bool exchange_success = HA_ATOMIC_CAS(next_tick_ptr, &next_throttle_log_tick, new_log_tick);
+                if (!tick_isset(next_throttle_log_tick) || tick_is_expired(next_throttle_log_tick, now_ms)) {
+                    unsigned int new_log_tick = tick_add(now_ms, MS_TO_TICKS(1000));
+                    const bool exchange_success = HA_ATOMIC_CAS(next_tick_ptr, &next_throttle_log_tick, new_log_tick);
 
-                // We only want to log once each second for each user but there could be many different threads
-                // processing requests for this user, so we do an atomic compare-and-swap (CAS) on the tick at which
-                // we're next allowed to swap. If the CAS goes through successfully then we're the thread that changed
-                // it, so we can log. If it failed then another thread got in before us and they would have logged, so
-                // we can just skip that here.
-                if (exchange_success) {
-                    struct timespec t = {};
-                    const int result = clock_gettime(CLOCK_REALTIME, &t);
-                    const long long timestamp_usec = (t.tv_sec * 1000000) + (t.tv_nsec / 1000);
-                    WARN_ON(result != 0);
+                    // We only want to log once each second for each user but there could be many different threads
+                    // processing requests for this user, so we do an atomic compare-and-swap (CAS) on the tick at which
+                    // we're next allowed to swap. If the CAS goes through successfully then we're the thread that
+                    // changed it, so we can log. If it failed then another thread got in before us and they would have
+                    // logged, so we can just skip that here.
+                    if (exchange_success) {
+                        struct timespec t = {};
+                        const int result = clock_gettime(CLOCK_REALTIME, &t);
+                        const long long timestamp_usec = (t.tv_sec * 1000000) + (t.tv_nsec / 1000);
+                        WARN_ON(result != 0);
 
-                    send_log(NULL, LOG_INFO, "weir-throttle~|~%lld~|~user_bnd_%s~|~%s", timestamp_usec,
-                             st->bandwidth_limit_direction, st->limit_key);
+                        send_log(NULL, LOG_INFO, "weir-throttle~|~%lld~|~user_bnd_%s~|~%s", timestamp_usec,
+                                 st->bandwidth_limit_direction, st->limit_key);
+                    }
                 }
+            } else {
+                bytes_to_forward = len;
+                rl_data_transferred(st->remote_addr, direction, len);
             }
-        } else {
-            bytes_to_forward = len;
-            rl_data_transferred(st->remote_addr, direction, len);
         }
     }
 
-    // Honestly, I don't understand exactly why this is required to make it work.
-    // This is what flt_bwlim does and if we don't set this correctly then either
-    // HAProxy stops processing the stream (if we return 0 bytes to forward without
-    // setting `analyse_exp` appropriately on the channel) or it hits a watchdog
-    // timer and asserts (if we set return 0 bytes to forward and set `analyse_exp`
-    // to something too small).
+    // analyse_exp defines the minimum time at which this analyser (filter) should run again on this channel.
+    // When we throttle a transfer, we set this into the future to avoid delay forwarding of data on this channel
+    // without being called in a tight loop. Whenever this value is in the past, HAProxy will run this analyser
+    // so it should always either be TICK_ETERNITY or some finite value in the future.
     msg->chn->analyse_exp =
         tick_first((tick_is_expired(msg->chn->analyse_exp, now_ms) ? TICK_ETERNITY : msg->chn->analyse_exp),
-                   st->next_allowed_send_tick);
+                   *next_allowed_send_tick);
+    BUG_ON(tick_is_expired(msg->chn->analyse_exp, now_ms));
     return bytes_to_forward;
 }
 
@@ -506,6 +525,7 @@ static struct flt_ops weir_lim_ops = {
     /* Filter HTTP requests and responses */
     .http_headers = weir_http_headers,
     .http_payload = weir_http_payload,
+    .http_end = weir_http_end,
 };
 
 /* Enable the filter on a stream. It always returns ACT_RET_CONT. On error, the rule is ignored.
