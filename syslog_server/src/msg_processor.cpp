@@ -398,8 +398,6 @@ void Processor::processReqEnd(std::string_view raw_input) {
     ++m_qos_not_send_count;
 }
 
-void Processor::processStsTokenRoleMapping(std::string_view raw_input) {
-    (void)raw_input;
-}
+void Processor::processStsTokenRoleMapping(std::string_view raw_input) { (void)raw_input; }
 
 } // namespace syslogsrv
