@@ -2,10 +2,17 @@
 core = {register_fetches = function () return nil end,
         register_service = function() return nil end,
         register_action = function() return nil end,
+        register_filter = function() return nil end,
         Debug = function(msg) print("DEBUG: "..msg) return nil end,
         Info = function(msg) print("INFO: "..msg) return nil end,
         Warning = function(msg) print("WARN: "..msg) return nil end,
     }
+
+filter = {
+    FLT_CFG_FL_HTX = 1,
+    register_data_filter = function(self, chn) return nil end,
+    unregister_data_filter = function(self, chn) return nil end,
+}
 
 require("weir-s3")
 local lu = require("luaunit")
@@ -56,7 +63,7 @@ test_get_access_key_from_query_string = {}
         lu.assertEquals(get_access_key(headers, get_decoded_query_params("AWSACCESSKEYID=AKIAIOSFODNN7EXAMPLE&")), "AKIAIOSFODNN7EXAMPLE")
     end
 
--- STS QoS tests starts here 
+-- STS QoS tests starts here
 -- Tests for is_sts_credential_req
 
 TestIfStsCredentialReq = {}
@@ -84,7 +91,7 @@ end
 
 TestStsQosPopulateTxnContext = {}
 
--- Create a mock table to run unit tests for sts_qos_populate_txn_context since it relies on the txn object provided by HAProxy, which is not available in a standalone Lua environment. 
+-- Create a mock table to run unit tests for sts_qos_populate_txn_context since it relies on the txn object provided by HAProxy, which is not available in a standalone Lua environment.
 -- This mock will simulate the necessary methods and properties of the txn object for testing purposes.
 local function make_mock_txn(opts)
     local vars = {}
@@ -194,6 +201,146 @@ function TestStsQosPopulateTxnContext:test_does_not_set_if_body_parse_when_body_
     lu.assertNil(txn:get_var("txn.if_body_parse"))
 end
 
--- STS QoS tests ends here 
+-- Tests for StsFilter:http_payload and StsFilter:start_analyze
+
+TestStsFilterHttpPayload = {}
+TestStsFilterStartAnalyze = {}
+
+local function make_mock_http_msg(opts)
+    return {
+        channel = {
+            is_resp = function() return opts.is_resp end,
+        },
+        body = function(self, len)
+            return opts.body
+        end,
+    }
+end
+
+local function make_mock_filter_txn(opts)
+    local vars = {}
+    if opts.if_body_parse then
+        vars["txn.if_body_parse"] = opts.if_body_parse
+    end
+    return {
+        get_var = function(self, name)
+            return vars[name]
+        end,
+        set_var = function(self, name, value)
+            vars[name] = value
+        end,
+    }
+end
+
+function TestStsFilterHttpPayload:test_emits_log_for_assume_role_response()
+    local logged = {}
+    core.Info = function(msg) table.insert(logged, msg) end
+
+    local unregistered = false
+    filter.unregister_data_filter = function(self, chn)
+        unregistered = true
+    end
+
+    local sts = StsFilter:new()
+    local txn = make_mock_filter_txn({ if_body_parse = "yes" })
+    local http_msg = make_mock_http_msg({
+        is_resp = true,
+        body = "<AssumeRoleResponse><Credentials><SessionToken>tok123</SessionToken></Credentials></AssumeRoleResponse>",
+    })
+
+    sts:http_payload(txn, http_msg)
+
+    lu.assertEquals(#logged, 1)
+    lu.assertStrContains(logged[1], "role_ststoken~|~")
+    lu.assertStrContains(logged[1], "<SessionToken>tok123</SessionToken>")
+    lu.assertEquals(unregistered, true)
+
+    core.Info = function(msg) print("INFO: "..msg) return nil end
+    filter.unregister_data_filter = function(self, chn) return nil end
+end
+
+function TestStsFilterHttpPayload:test_no_log_when_if_body_parse_not_set()
+    local logged = {}
+    core.Info = function(msg) table.insert(logged, msg) end
+
+    local sts = StsFilter:new()
+    local txn = make_mock_filter_txn({})
+    local http_msg = make_mock_http_msg({
+        is_resp = true,
+        body = "<AssumeRoleResponse>some body</AssumeRoleResponse>",
+    })
+
+    sts:http_payload(txn, http_msg)
+
+    lu.assertEquals(#logged, 0)
+    core.Info = function(msg) print("INFO: "..msg) return nil end
+end
+
+function TestStsFilterHttpPayload:test_no_log_when_not_response_channel()
+    local logged = {}
+    core.Info = function(msg) table.insert(logged, msg) end
+
+    local sts = StsFilter:new()
+    local txn = make_mock_filter_txn({ if_body_parse = "yes" })
+    local http_msg = make_mock_http_msg({
+        is_resp = false,
+        body = "<AssumeRoleResponse>some body</AssumeRoleResponse>",
+    })
+
+    sts:http_payload(txn, http_msg)
+
+    lu.assertEquals(#logged, 0)
+    core.Info = function(msg) print("INFO: "..msg) return nil end
+end
+
+function TestStsFilterStartAnalyze:test_registers_data_filter_for_response_when_body_parse_set()
+    local registered = false
+    filter.register_data_filter = function(self, chn)
+        registered = true
+    end
+
+    local sts = StsFilter:new()
+    local txn = make_mock_filter_txn({ if_body_parse = "yes" })
+    local chn = { is_resp = function() return true end }
+
+    sts:start_analyze(txn, chn)
+
+    lu.assertEquals(registered, true)
+    filter.register_data_filter = function(self, chn) return nil end
+end
+
+function TestStsFilterStartAnalyze:test_does_not_register_for_request_channel()
+    local registered = false
+    filter.register_data_filter = function(self, chn)
+        registered = true
+    end
+
+    local sts = StsFilter:new()
+    local txn = make_mock_filter_txn({ if_body_parse = "yes" })
+    local chn = { is_resp = function() return false end }
+
+    sts:start_analyze(txn, chn)
+
+    lu.assertEquals(registered, false)
+    filter.register_data_filter = function(self, chn) return nil end
+end
+
+function TestStsFilterStartAnalyze:test_does_not_register_when_body_parse_not_set()
+    local registered = false
+    filter.register_data_filter = function(self, chn)
+        registered = true
+    end
+
+    local sts = StsFilter:new()
+    local txn = make_mock_filter_txn({})
+    local chn = { is_resp = function() return true end }
+
+    sts:start_analyze(txn, chn)
+
+    lu.assertEquals(registered, false)
+    filter.register_data_filter = function(self, chn) return nil end
+end
+
+-- STS QoS tests ends here
 
 os.exit(lu.LuaUnit.run())

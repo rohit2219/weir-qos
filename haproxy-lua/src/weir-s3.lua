@@ -279,3 +279,47 @@ end
 
 core.register_action("sts_qos_populate_txn_context", { "http-req" }, sts_qos_populate_txn_context)
 
+StsFilter = {}
+StsFilter.id = "Lua Sts filter"
+StsFilter.flags = filter.FLT_CFG_FL_HTX
+StsFilter.__index = StsFilter
+
+function StsFilter:new()
+    local trace = {}
+    setmetatable(trace, StsFilter)
+    trace.res_len = 0
+    return trace
+end
+
+function StsFilter:start_analyze(txn, chn)
+    -- Register a payload filter only for AssumeRole responses.
+    if chn and chn:is_resp() and txn:get_var("txn.if_body_parse") ~= nil then
+        filter.register_data_filter(self, chn)
+    end
+end
+
+function StsFilter:end_analyze(txn, chn)
+end
+
+function StsFilter:http_payload(txn, http_msg)
+    if http_msg ~= nil and type(http_msg) == "table" then
+        if http_msg.channel ~= nil and type(http_msg.channel) == "table" then
+            if http_msg.channel:is_resp() then
+                local is_assume_role_setvar = txn:get_var("txn.if_body_parse")
+                if is_assume_role_setvar ~= nil and type(http_msg.body) == "function" then
+                    -- AssumeRole responses are small; one read is sufficient for token extraction.
+                    local body = http_msg:body(-930)
+                    if body ~= nil and type(body) == "string" and #body > 0 then
+                        core.Info("role_ststoken~|~" .. body)
+                        filter.unregister_data_filter(self, http_msg.channel)
+                    end
+                end
+            end
+        end
+    end
+end
+
+core.register_filter("StsFilter", StsFilter, function(sts_filter, args)
+    return sts_filter
+end)
+
